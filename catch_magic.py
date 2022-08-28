@@ -9,18 +9,19 @@ import pytz
 from collections import deque
 from datetime import datetime
 from time import sleep, time
-from requests import get
+from requests import get, ReadTimeout
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from bs4 import BeautifulSoup
 from loguru import logger
 
-RUN_CRONTAB = False  # 如果为真，代表运行一次 run 函数退出，需要以一定间隔运行脚本，主要解决内存问题。否则一直循环运行不退出
+RUN_CRONTAB = False  # 如果为真，代表脚本不会死循环，运行一次脚本退出，需要以一定间隔运行脚本，主要解决内存问题；否则一直循环运行不退出。
+RUN_TIMES = 1  # RUN_CRONTAB 为真时运行脚本一次 run 函数循环的次数，默认运行一次脚本结束，但如果频繁运行影响性能的话可以改大
 R_ARGS = {'headers': {'cookie': 'nexusphp_u2=',  # 填网站 cookie，不要空格
                       'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
                                     'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/104.0.5112.81 Safari/537.36'
                       },
-          'timeout': 20,
-          'proxies': {  # 'http': "127.0.0.1:10809", 'https': "127.0.0.1:10809"
+          'timeout': 20,  # 超时秒数
+          'proxies': {  # 'http': "127.0.0.1:10809", 'https': "127.0.0.1:10809"  # 代理
           }
           }  # requests 模块参数
 BK_DIR = '/root/backup'  # 备份种子文件夹路径
@@ -31,11 +32,14 @@ LOG_PATH = f'{os.path.splitext(__file__)[0]}.log'  # 日志文件路径
 DATA_PATH = f'{os.path.splitext(__file__)[0]}.data.txt'  # 数据文件路径
 DOWNLOAD_ON_FIRST_TIME = False  # 如果为真，第一次下载所有符合要求的种子，否则的话跳过第一次的所有种子，只在 RUN_CRONTAB 为真的时候有效
 DOWNLOAD_NON_FREE = False  # 如果为真为下载不是 free 的种子，否则的话只下载 free 的种子
-MIN_DAY = 7  # 种子发布时间小于此天数则不下载，避免下载新种
+MIN_DAY = 7  # 种子发布时间超过此天数判断为旧种子，否则判断为新种子
+DOWNLOAD_OLD = True  # 下载旧种子
+DOWNLOAD_NEW = False  # 下载新种子
 MAGIC_SELF = False  # 如果为真，会下载给自己放魔法的种子，否则不下载
 EFFECTIVE_BUFFER = 60  # 如果该魔法是 free 并且生效时间在此之内，就算种子不是 free 也直接下载
-DOWNLOAD_DEAD_SEED = False  # 默认不下载无人做种的种子，如果要下载改成 True
+DOWNLOAD_DEAD_SEED = False  # 默认不下载无人做种的旧种子(新种总有人做种，所以不考虑有没有人做种一律下载)，如果要下载改成 True
 RE_DOWNLOAD = True  # 如果为 False，检测到备份文件夹有该种子则不再次下载
+CHECK_PEERLIST = False  # 检查 peer 列表，如果已经在做种或者在下载则不下载种子
 
 
 class CatchMagic:
@@ -56,49 +60,66 @@ class CatchMagic:
     def all_effective_magic(self):
         all_checked = True if self.first_time else False
         index = 0
+        id_0 = self.magic_id_0
+
         while True:
             soup = self.get_soup(f'https://u2.dmhy.org/promotion.php?action=list&page={index}')
             user_name = soup.find('table', {'id': 'info_block'}).bdo.text
             for i, tr in filter(lambda tup: tup[0] > 0, enumerate(soup.find('table', {'width': '99%'}))):
+                magic_id = int(tr.contents[0].string)
+                if index == 0 and i == 1:
+                    self.magic_id_0 = magic_id
+
                 if tr.contents[1].string in ['魔法', 'Magic', 'БР']:
                     if tr.contents[2].a:
                         if tr.contents[3].string in ['所有人', 'Everyone', 'Для всех', *(
                                 [user_name] if MAGIC_SELF else [])]:
                             tid = int(tr.contents[2].a['href'][15:])
-                            magic_id = int(tr.contents[0].string)
-                            if magic_id not in self.checked:
-                                if self.magic_id_0 and magic_id == self.magic_id_0:  # 新增魔法数量超过了 deque 最大长度
-                                    all_checked = True
-                                    break
+                            if magic_id not in self.checked and magic_id != id_0:
                                 if self.first_time and not RUN_CRONTAB and not DOWNLOAD_ON_FIRST_TIME:
                                     self.checked.append(magic_id)
                                 else:
                                     yield magic_id, tid
-                            else:
-                                all_checked = True
-                                break
+                                continue
+
+                if magic_id == id_0:
+                    all_checked = True
+                    break
+                elif magic_id not in self.checked:
+                    self.checked.append(magic_id)
+
             if all_checked:
                 break
             else:
                 index += 1  # 新增魔法数量不小于单页魔法数量
-        if self.first_time and not RUN_CRONTAB:
+
+        if self.magic_id_0 != id_0:
             with open(f'{DATA_PATH}', 'w', encoding='utf-8') as f:
                 f.write(f'checked = {self.checked}\n')
         self.first_time = False
-        self.magic_id_0 = max(self.checked)
 
-    @staticmethod
-    def dl_to(to_name, dl_link):
+    def dl_to(self, to_name, dl_link):
         tid = dl_link.split('&passkey')[0].split('id=')[1]
+
+        if CHECK_PEERLIST:
+            peer_list = self.get_soup(f'https://u2.dmhy.org/viewpeerlist.php?id={tid}')
+            tables = peer_list.find_all('table')
+            for table in tables or []:
+                for tr in filter(lambda _tr: 'nowrap' in str(_tr), table):
+                    if tr.get('bgcolor'):
+                        logger.info(f"Torrent {tid} | you are already "
+                                    f"{'downloading' if len(tr.contents) == 12 else 'seeding'} the torrent")
+                        return
+
         if f'[U2].{tid}.torrent' in os.listdir(BK_DIR):
             if not RE_DOWNLOAD:
-                logger.info(f'Torrent {tid} | you have downloaded this torrent before, passed')
+                logger.info(f'Torrent {tid} | you have downloaded this torrent before')
                 return
         else:
             with open(f'{BK_DIR}/[U2].{tid}.torrent', 'wb') as f:
                 f.write(get(dl_link, **R_ARGS).content)
+
         shutil.copy(f'{BK_DIR}/[U2].{tid}.torrent', f'{WT_DIR}/[U2].{tid}.torrent')
-        tid = dl_link.split('&passkey')[0].split('id=')[1]
         logger.info(f'Download torrent {tid}, name {to_name}')
 
     @classmethod
@@ -130,19 +151,25 @@ class CatchMagic:
 
     def analyze_magic(self, magic_id, tid):
         soup = self.get_soup(f'https://u2.dmhy.org/details.php?id={tid}')
-        self.checked.append(magic_id)
-        with open(f'{DATA_PATH}', 'w', encoding='utf-8') as f:
-            f.write(f'checked = {self.checked}\n')
         delta = self.timedelta(soup.time.get('title') or soup.time.text, self.get_tz(soup))
-
-        if delta < MIN_DAY * 86400:
-            logger.debug(f'Torrent {tid} | time < {MIN_DAY} days')
-            return
-
+        seeder_count = int(re.search(r'(\d+)', soup.find('div', {'id': 'peercount'}).b.text).group(1))
         aa = soup.select('a.index')
         to_name = aa[0].text[5:-8]
         dl_link = f"https://u2.dmhy.org/{aa[1]['href']}"
         magic_page_soup = None
+
+        if delta < MIN_DAY * 86400:
+            if DOWNLOAD_NEW:
+                if seeder_count > MAX_SEEDER_NUM:
+                    logger.debug(f'Torrent {tid} | seeders > {MAX_SEEDER_NUM}, passed')
+                else:
+                    self.dl_to(to_name, dl_link)
+            else:
+                logger.debug(f'Torrent {tid} | time < {MIN_DAY} days, passed')
+            return
+        elif not DOWNLOAD_OLD:
+            logger.debug(f'Torrent {tid} | time > {MIN_DAY} days, passed')
+            return
 
         if not DOWNLOAD_NON_FREE:
             if [self.get_pro(tr.contents[1])[1] for tr in soup.find('table', {'width': '90%'})
@@ -159,7 +186,6 @@ class CatchMagic:
                 else:
                     return
 
-        seeder_count = int(re.search(r'(\d+)', soup.find('div', {'id': 'peercount'}).b.text).group(1))
         if seeder_count > 0:
             if seeder_count <= MAX_SEEDER_NUM:
                 self.dl_to(to_name, dl_link)
@@ -172,31 +198,51 @@ class CatchMagic:
                     logger.debug(f'Torrent {tid} | user {user} is looking for help, downloading...')
                     self.dl_to(to_name, dl_link)
                 else:
-                    logger.debug(f'Torrent {tid} | seeders > {MAX_SEEDER_NUM}')
+                    logger.debug(f'Torrent {tid} | seeders > {MAX_SEEDER_NUM}, passed')
         else:
-            logger.debug(f'Torrent {tid} | no seeders, passed.')
+            logger.debug(f'Torrent {tid} | no seeders, passed')
 
     def run(self):
-        with ThreadPoolExecutor(max_workers=3) as executor:
-            futures = {executor.submit(self.analyze_magic, magic_id, tid): tid
+        id_0 = self.magic_id_0
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            futures = {executor.submit(self.analyze_magic, magic_id, tid): magic_id
                        for magic_id, tid in self.all_effective_magic()}
             if futures:
+                error = False
                 for future in as_completed(futures):
                     try:
                         future.result()
+                        self.checked.append(futures[future])
                     except Exception as er:
-                        logger.exception(er)
+                        error = True
+                        if isinstance(er, ReadTimeout):
+                            logger.error(er)
+                        else:
+                            logger.exception(er)
+                with open(f'{DATA_PATH}', 'w', encoding='utf-8') as f:
+                    f.write(f'checked = {self.checked}\n')
+                if error:
+                    self.magic_id_0 = id_0
 
 
-c = CatchMagic()
-if RUN_CRONTAB:
-    c.run()
-else:
-    while True:
+def main(catch):
+    for _ in range(RUN_TIMES):
         try:
-            c.run()
+            catch.run()
+        except ReadTimeout as e:
+            logger.error(e)
         except Exception as e:
             logger.exception(e)
         finally:
             gc.collect()
-            sleep(INTERVAL)
+            if _ != RUN_TIMES - 1:
+                sleep(INTERVAL)
+
+
+c = CatchMagic()
+if RUN_CRONTAB:
+    main(c)
+else:
+    while True:
+        main(c)
+        sleep(INTERVAL)
