@@ -2,8 +2,9 @@
 deluge 删种脚本，优先保留体积大、下载人数多、上传速度高、做种时间少的种子。
 用过一些删种工具，逻辑都比较粗暴，所以自己写了一个，
 每个种子综合考虑各项情况，分配加权把各项加起来，从低到高删除直到剩余空间大于指定值。
-50% 取当前速度和平均速度的平均值，30% 取做种中种子的上传速度按下载上传人数权重分配的值，
-20% 取做种中种子的上传速度按做种时间权重分配的值，同时有考虑体积，体积越大加权越高（大约是 0.2 次方）
+40% 取当前速度和平均速度的平均值，20% 取做种中种子的上传速度按做种时间权重分配的值，
+剩下的 40% 中其中一部分为取做种中种子的上传速度按下载上传人数权重分配的值，另一部分为按做种人数分配的值
+比例取决于参数 KS，同时有考虑体积，体积越大加权越高（大约是 0.2 次方）
 """
 
 from time import sleep
@@ -15,6 +16,7 @@ import os
 
 MIN_FREE_SPACE = 3725  # 最小剩余空间(GiB)，小于这个值删种
 MODE = 1  # 为 1 时先删除做种中的种子，删完后再删下载中的种子；否则综合考虑一起删
+KS = 0  # 按做种人数分配的权重占 40% 的比例，取值范围 [0, 1]，为 0 代表不考虑做种人数，这个参数的目的在于延长孤种的保种时间
 INTERVAL = 600  # 删种的时间间隔
 MIN_DOWN_TIME = 3600  # 下载时间小于这个值不删
 S0 = 300
@@ -130,9 +132,15 @@ class AutoDel:
             finally:
                 sleep(INTERVAL)
 
+    @staticmethod
+    def torrent_filter(state):
+        return lambda tup: tup[1]['label'] not in EXCLUDE_LABELS and tup[1]['state'] == state
+
     def weight(self):
         total_peer_weight = 0
         total_time_weight = 0
+        total_peers = 0
+        num = 0
         indicator = []
         info = []
         e_m = 0.0
@@ -140,55 +148,54 @@ class AutoDel:
         if av_ur == 0:
             av_ur = 1048576
 
-        for _id, data in self.torrent_status.items():
-            if data['label'] in EXCLUDE_LABELS:
-                continue
-            if data['state'] == 'Seeding':
-                data['peer_weight'] = data['total_peers'] / (data['total_seeds'] + 1) * data['total_size']
-                total_peer_weight += data['peer_weight']
-                k_time = data['seeding_time'] / 3600
-                k_size = data['total_size'] / (S0 * 1024 ** 3)
-                data['time_weight'] = pow(1 + pow((k_time / k_size), 2), -0.5)
-                total_time_weight += data['time_weight']
+        for _id, data in filter(self.torrent_filter('Seeding'), self.torrent_status.items()):
+            total_peers += data['total_peers']
+            num += 1
+
+        av_peer_num = total_peers / num if num > 0 else 0
+
+        for _id, data in filter(self.torrent_filter('Seeding'), self.torrent_status.items()):
+            data['peer_weight'] = (data['total_peers'] * (1 - KS) + av_peer_num * KS) / (
+                data['total_seeds'] if data['total_seeds'] > 0 else 1) * data['total_size']
+            total_peer_weight += data['peer_weight']
+            k_time = data['seeding_time'] / 3600
+            k_size = data['total_size'] / (S0 * 1024 ** 3)
+            data['time_weight'] = pow(1 + pow((k_time / k_size), 2), -0.5)
+            total_time_weight += data['time_weight']
 
         if total_time_weight > 0:
-            for _id, data in self.torrent_status.items():
-                if data['label'] in EXCLUDE_LABELS:
-                    continue
-                if data['state'] == 'Seeding':
-                    ur_e = data['upload_payload_rate'] * 0.5
-                    ur_tm_p = av_ur * data['time_weight'] / total_time_weight
-                    if total_peer_weight > 0:
-                        ur_pr_p = av_ur * data['peer_weight'] / total_peer_weight
-                        ur_e += ur_pr_p * 0.3 + ur_tm_p * 0.2
-                    else:
-                        ur_e += ur_tm_p * 0.5
-                    sz_e = data['total_done'] / 1024 ** 3
-                    e = ur_e * pow(sz_e, -0.8)
-                    indicator.append(e)
-                    info.append({'_id': _id, 'name': data['name'], 'done': data['total_done'], 'state': data['state']})
+            for _id, data in filter(self.torrent_filter('Seeding'), self.torrent_status.items()):
+                ur_e = data['upload_payload_rate'] * 0.4
+                ur_tm_p = av_ur * data['time_weight'] / total_time_weight
+                if total_peer_weight > 0:
+                    ur_pr_p = av_ur * data['peer_weight'] / total_peer_weight
+                    ur_e += ur_pr_p * 0.4 + ur_tm_p * 0.2
+                else:
+                    ur_e += ur_tm_p * 0.6
+                sz_e = data['total_done'] / 1024 ** 3
+                e = ur_e * pow(sz_e, -0.8)
+                indicator.append(e)
+                info.append({'_id': _id, 'name': data['name'], 'done': data['total_done'], 'state': data['state']})
             if MODE == 1 or av_ur == 0:
                 e_m = max(indicator) + 1
 
-        for _id, data in self.torrent_status.items():
-            if data['label'] in EXCLUDE_LABELS:
+        for _id, data in filter(self.torrent_filter('Downloading'), self.torrent_status.items()):
+            if data['active_time'] < MIN_DOWN_TIME:
                 continue
-            if data['state'] == 'Downloading':
-                if data['active_time'] < MIN_DOWN_TIME:
-                    continue
-                au = data['total_uploaded'] / (data['active_time'] + 1)
-                ur = data['upload_payload_rate']
-                ur_e = au * 0.5 + ur * 0.5
-                sz_a = data['download_payload_rate'] * INTERVAL / 2
-                if sz_a < data['total_size'] - data['total_done']:
-                    sz_e = data['total_size'] / 1024 ** 3
-                else:
-                    sz_e = (sz_a + data['total_done']) / 1024 ** 3
-                if sz_e == 0:
-                    continue
-                e = ur_e * pow(sz_e, -0.8) + e_m
-                indicator.append(e)
-                info.append({'_id': _id, 'name': data['name'], 'done': data['total_done'], 'state': data['state']})
+            au = data['total_uploaded'] / (data['active_time'] + 1)
+            ur = data['upload_payload_rate']
+            ur_e = au * 0.5 + ur * 0.5
+            sz_a = data['download_payload_rate'] * INTERVAL / 2
+            if sz_a < data['total_size'] - data['total_done']:
+                sz_e = data['total_size'] / 1024 ** 3
+            else:
+                sz_e = (sz_a + data['total_done']) / 1024 ** 3
+            if sz_e == 0:
+                continue
+            e = ur_e * pow(sz_e, -0.8) + e_m
+            indicator.append(e)
+            info.append({'_id': _id, 'name': data['name'], 'done': data['total_done'], 'state': data['state']})
+
         return indicator, info
 
 
