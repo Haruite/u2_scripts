@@ -33,13 +33,14 @@ DATA_PATH = f'{os.path.splitext(__file__)[0]}.data.txt'  # 数据文件路径
 DOWNLOAD_ON_FIRST_TIME = False  # 如果为真，第一次下载所有符合要求的种子，否则的话跳过第一次的所有种子，只在 RUN_CRONTAB 为真的时候有效
 DOWNLOAD_NON_FREE = False  # 如果为真为下载不是 free 的种子，否则的话只下载 free 的种子
 MIN_DAY = 7  # 种子发布时间超过此天数判断为旧种子，否则判断为新种子
-DOWNLOAD_OLD = True  # 下载旧种子
-DOWNLOAD_NEW = False  # 下载新种子
+DOWNLOAD_OLD = True  # 是否下载旧种子
+DOWNLOAD_NEW = False  # 是否下载新种子
 MAGIC_SELF = False  # 如果为真，会下载给自己放魔法的种子，否则不下载
 EFFECTIVE_BUFFER = 60  # 如果该魔法是 free 并且生效时间在此之内，就算种子不是 free 也直接下载
 DOWNLOAD_DEAD_SEED = False  # 默认不下载无人做种的旧种子(新种总有人做种，所以不考虑有没有人做种一律下载)，如果要下载改成 True
 RE_DOWNLOAD = True  # 如果为 False，检测到备份文件夹有该种子则不再次下载
 CHECK_PEERLIST = False  # 检查 peer 列表，如果已经在做种或者在下载则不下载种子
+DA_QIAO = True  # 是否搭桥，如果搭桥，即使做种人数超过最大值魔法咒语有’搭桥‘或’加速‘也会下载
 
 
 class CatchMagic:
@@ -189,16 +190,17 @@ class CatchMagic:
         if seeder_count > 0:
             if seeder_count <= MAX_SEEDER_NUM:
                 self.dl_to(to_name, dl_link)
-            else:
+                return
+            elif DA_QIAO:
                 if not magic_page_soup:
                     magic_page_soup = self.get_soup(f'https://u2.dmhy.org/promotion.php?action=detail&id={magic_id}')
                 comment = magic_page_soup.legend.parent.contents[1].text
                 if '搭' in comment and '桥' in comment or '加' in comment and '速' in comment:
                     user = magic_page_soup.select('table.main bdo')[0].text
-                    logger.debug(f'Torrent {tid} | user {user} is looking for help, downloading...')
+                    logger.info(f'Torrent {tid} | user {user} is looking for help, downloading...')
                     self.dl_to(to_name, dl_link)
-                else:
-                    logger.debug(f'Torrent {tid} | seeders > {MAX_SEEDER_NUM}, passed')
+                    return
+            logger.debug(f'Torrent {tid} | seeders > {MAX_SEEDER_NUM}, passed')
         else:
             logger.debug(f'Torrent {tid} | no seeders, passed')
 
@@ -234,8 +236,8 @@ def main(catch):
         except Exception as e:
             logger.exception(e)
         finally:
-            gc.collect()
             if _ != RUN_TIMES - 1:
+                gc.collect()
                 sleep(INTERVAL)
 
 
