@@ -35,13 +35,13 @@ MIN_DAY = 7  # 种子发布时间超过此天数判断为旧种子，否则判�
 DOWNLOAD_OLD = True  # 是否下载旧种子
 DOWNLOAD_NEW = False  # 是否下载新种子
 MAGIC_SELF = False  # 如果为真，会下载给自己放魔法的种子，否则不下载
-EFFECTIVE_BUFFER = 60  # 如果该魔法是 free 并且生效时间在此之内，就算种子不是 free 也直接下载
+EFFECTIVE_DELAY = 60  # 如果该魔法是 free 并且生效时间在此之内，就算种子不是 free 也直接下载
 DOWNLOAD_DEAD_TO = False  # 默认不下载无人做种的旧种子(新种总有人做种，所以不考虑有没有人做种一律下载)，如果要下载改成 True
 RE_DOWNLOAD = True  # 如果为 False，检测到备份文件夹有该种子则不再次下载
 CHECK_PEERLIST = False  # 检查 peer 列表，如果已经在做种或者在下载则不下载种子
 DA_QIAO = True  # 是否搭桥，如果搭桥，即使做种人数超过最大值魔法咒语有’搭桥‘或’加速‘也会下载
 MIN_RE_DL_DAYS = 0  # 离最近一次下载该种子的最小天数，小于这个天数不下载种子
-CAT_FILTER = []  # 种子类型为其中之一则下载，类型见 torrent.php，多个用逗号隔开，不填就不进行类型过滤，比如 ['BDMV', 'Lossless Music']
+CAT_FILTER = []  # 种子类型为其中之一则下载，类型见 torrents.php，多个用逗号隔开，不填就不进行类型过滤，比如 ['BDMV', 'Lossless Music']
 SIZE_FILTER = [0, -1]  # 体积过滤，第一个数为体积最小值(GB)，第二个为最大值(GB)，-1 表示不设上限
 NAME_FILTER = []  # 过滤种子标题，如果标题或者文件名中包含这些字符串之一则排除不下载，多个用逗号隔开，字符串要加引号，比如 ['BDrip']
 
@@ -86,7 +86,7 @@ class CatchMagic:
                             if tr.contents[2].a:
                                 tid = int(tr.contents[2].a['href'][15:])
                                 if magic_id not in self.checked and magic_id != id_0:
-                                    if self.first_time and all_checked is True:
+                                    if self.first_time and all_checked:
                                         self.checked.append(magic_id)
                                     else:
                                         yield magic_id, tid
@@ -176,7 +176,7 @@ class CatchMagic:
                 logger.debug(f'Torrent {tid} | torrent category {cat} does not match, passed')
                 return
 
-        if SIZE_FILTER and SIZE_FILTER[0] <= 0 and SIZE_FILTER[1] == -1:
+        if SIZE_FILTER and not (SIZE_FILTER[0] <= 0 and SIZE_FILTER[1] == -1):
             size_str = soup.time.parent.contents[5].strip().replace(',', '.').replace('Б', 'B')
             [num, unit] = size_str.split(' ')
             _pow = ['MiB', 'GiB', 'TiB', '喵', '寄', '烫'].index(unit) % 3
@@ -225,7 +225,7 @@ class CatchMagic:
                 tbody = magic_page_soup.find('table', {'width': '75%', 'cellpadding': 4}).tbody
                 if self.get_pro(tbody.contents[6].contents[1])[1] == 0:
                     delay = -self.timedelta(tbody.contents[4].contents[1].string, self.get_tz(magic_page_soup))
-                    if -1 < delay < 60:
+                    if -1 < delay < EFFECTIVE_DELAY:
                         logger.debug(f'Torrent {tid} | free magic {magic_id} will be effective in {int(delay)}s')
                     else:
                         return
@@ -281,7 +281,7 @@ def main(catch):
         except Exception as e:
             logger.exception(e)
         finally:
-            if _ != RUN_TIMES - 1:
+            if _ != RUN_TIMES - 1 or not RUN_CRONTAB:
                 gc.collect()
                 sleep(INTERVAL)
 
@@ -292,4 +292,3 @@ if RUN_CRONTAB:
 else:
     while True:
         main(c)
-        sleep(INTERVAL)
