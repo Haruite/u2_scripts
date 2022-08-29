@@ -30,17 +30,20 @@ INTERVAL = 120  # 检查魔法的时间间隔
 MAX_SEEDER_NUM = 5  # 最大的做种人数，超过不下载
 LOG_PATH = f'{os.path.splitext(__file__)[0]}.log'  # 日志文件路径
 DATA_PATH = f'{os.path.splitext(__file__)[0]}.data.txt'  # 数据文件路径
-DOWNLOAD_ON_FIRST_TIME = False  # 如果为真，第一次下载所有符合要求的种子，否则的话跳过第一次的所有种子，只在 RUN_CRONTAB 为真的时候有效
 DOWNLOAD_NON_FREE = False  # 如果为真为下载不是 free 的种子，否则的话只下载 free 的种子
 MIN_DAY = 7  # 种子发布时间超过此天数判断为旧种子，否则判断为新种子
 DOWNLOAD_OLD = True  # 是否下载旧种子
 DOWNLOAD_NEW = False  # 是否下载新种子
 MAGIC_SELF = False  # 如果为真，会下载给自己放魔法的种子，否则不下载
 EFFECTIVE_BUFFER = 60  # 如果该魔法是 free 并且生效时间在此之内，就算种子不是 free 也直接下载
-DOWNLOAD_DEAD_SEED = False  # 默认不下载无人做种的旧种子(新种总有人做种，所以不考虑有没有人做种一律下载)，如果要下载改成 True
+DOWNLOAD_DEAD_TO = False  # 默认不下载无人做种的旧种子(新种总有人做种，所以不考虑有没有人做种一律下载)，如果要下载改成 True
 RE_DOWNLOAD = True  # 如果为 False，检测到备份文件夹有该种子则不再次下载
 CHECK_PEERLIST = False  # 检查 peer 列表，如果已经在做种或者在下载则不下载种子
 DA_QIAO = True  # 是否搭桥，如果搭桥，即使做种人数超过最大值魔法咒语有’搭桥‘或’加速‘也会下载
+MIN_RE_DL_DAYS = 0  # 离最近一次下载该种子的最小天数，小于这个天数不下载种子
+CAT_FILTER = []  # 种子类型为其中之一则下载，类型见 torrent.php，多个用逗号隔开，不填就不进行类型过滤，比如 ['BDMV', 'Lossless Music']
+SIZE_FILTER = [0, -1]  # 体积过滤，第一个数为体积最小值(GB)，第二个为最大值(GB)，-1 表示不设上限
+NAME_FILTER = []  # 过滤种子标题，如果标题或者文件名中包含这些字符串之一则排除不下载，多个用逗号隔开，字符串要加引号，比如 ['BDrip']
 
 
 class CatchMagic:
@@ -48,40 +51,46 @@ class CatchMagic:
 
     def __init__(self):
         logger.add(level='DEBUG', sink=LOG_PATH, rotation='2 MB')
-        self.checked = deque([], maxlen=200)
-        self.first_time = True
+        self.checked, self.magic_id_0 = deque([], maxlen=200), None
         with open(DATA_PATH, 'a', encoding='utf-8'):
             pass
         with open(DATA_PATH, 'r', encoding='utf-8') as f:
-            fr = f.read()
-            if fr.startswith('checked = '):
-                self.checked = eval(fr[len('checked = '):])
-        self.magic_id_0 = None
+            for line in f:
+                if line.startswith('checked = '):
+                    self.checked = eval(line[len('checked = '):])
+                if line.startswith('id_0 = '):
+                    self.magic_id_0 = eval(line[len('id_0 = '):])
+        self.first_time = True
 
     def all_effective_magic(self):
-        all_checked = True if self.first_time else False
+        all_checked = True if self.first_time and not self.magic_id_0 else False
         index = 0
         id_0 = self.magic_id_0
 
         while True:
             soup = self.get_soup(f'https://u2.dmhy.org/promotion.php?action=list&page={index}')
-            user_name = soup.find('table', {'id': 'info_block'}).bdo.text
+            user_id = soup.find('table', {'id': 'info_block'}).a['href'][19:]
             for i, tr in filter(lambda tup: tup[0] > 0, enumerate(soup.find('table', {'width': '99%'}))):
                 magic_id = int(tr.contents[0].string)
                 if index == 0 and i == 1:
                     self.magic_id_0 = magic_id
-
+                    if self.first_time and id_0 and magic_id - id_0 > 10 * INTERVAL:
+                        all_checked = True
+                if tr.contents[5].string in ['Expired', '已失效']:
+                    all_checked = True
+                    break
                 if tr.contents[1].string in ['魔法', 'Magic', 'БР']:
-                    if tr.contents[2].a:
-                        if tr.contents[3].string in ['所有人', 'Everyone', 'Для всех', *(
-                                [user_name] if MAGIC_SELF else [])]:
-                            tid = int(tr.contents[2].a['href'][15:])
-                            if magic_id not in self.checked and magic_id != id_0:
-                                if self.first_time and not RUN_CRONTAB and not DOWNLOAD_ON_FIRST_TIME:
-                                    self.checked.append(magic_id)
-                                else:
-                                    yield magic_id, tid
-                                continue
+                    if not tr.contents[3].a and tr.contents[3].string in ['所有人', 'Everyone', 'Для всех'] or \
+                            MAGIC_SELF and tr.contents[3].a and tr.contents[3].a['href'][19:] == user_id:
+                        if tr.contents[5].string not in ['Terminated', '终止', '終止', 'Прекращён']:
+                            if tr.contents[2].a:
+                                tid = int(tr.contents[2].a['href'][15:])
+                                if magic_id not in self.checked and magic_id != id_0:
+                                    if self.first_time and all_checked is True:
+                                        self.checked.append(magic_id)
+                                    else:
+                                        yield magic_id, tid
+                                    continue
 
                 if magic_id == id_0:
                     all_checked = True
@@ -96,13 +105,13 @@ class CatchMagic:
 
         if self.magic_id_0 != id_0:
             with open(f'{DATA_PATH}', 'w', encoding='utf-8') as f:
-                f.write(f'checked = {self.checked}\n')
+                f.write(f'checked = {self.checked}\nid_0 = {self.magic_id_0}\n')
         self.first_time = False
 
-    def dl_to(self, to_name, dl_link):
-        tid = dl_link.split('&passkey')[0].split('id=')[1]
+    def dl_to(self, to_info):
+        tid = to_info['dl_link'].split('&passkey')[0].split('id=')[1]
 
-        if CHECK_PEERLIST:
+        if CHECK_PEERLIST and to_info['last_dl_time']:
             peer_list = self.get_soup(f'https://u2.dmhy.org/viewpeerlist.php?id={tid}')
             tables = peer_list.find_all('table')
             for table in tables or []:
@@ -118,10 +127,10 @@ class CatchMagic:
                 return
         else:
             with open(f'{BK_DIR}/[U2].{tid}.torrent', 'wb') as f:
-                f.write(get(dl_link, **R_ARGS).content)
+                f.write(get(to_info['dl_link'], **R_ARGS).content)
 
         shutil.copy(f'{BK_DIR}/[U2].{tid}.torrent', f'{WT_DIR}/[U2].{tid}.torrent')
-        logger.info(f'Download torrent {tid}, name {to_name}')
+        logger.info(f"Download torrent {tid}, name {to_info['to_name']}")
 
     @classmethod
     def get_tz(cls, soup):
@@ -152,11 +161,47 @@ class CatchMagic:
 
     def analyze_magic(self, magic_id, tid):
         soup = self.get_soup(f'https://u2.dmhy.org/details.php?id={tid}')
+        aa = soup.select('a.index')
+        to_info = {'to_name': aa[0].text[5:-8], 'dl_link': f"https://u2.dmhy.org/{aa[1]['href']}"}
+
+        if NAME_FILTER:
+            title = soup.find('h1', {'align': 'center', 'id': 'top'}).text
+            if any(st in title or st in to_info['to_name'] for st in NAME_FILTER):
+                logger.debug(f'Torrent {tid} | torrent excluded by NAME_FILTER')
+                return
+
+        if CAT_FILTER:
+            cat = soup.time.parent.contents[7].strip()
+            if cat not in CAT_FILTER:
+                logger.debug(f'Torrent {tid} | torrent category {cat} does not match, passed')
+                return
+
+        if SIZE_FILTER and SIZE_FILTER[0] <= 0 and SIZE_FILTER[1] == -1:
+            size_str = soup.time.parent.contents[5].strip().replace(',', '.').replace('Б', 'B')
+            [num, unit] = size_str.split(' ')
+            _pow = ['MiB', 'GiB', 'TiB', '喵', '寄', '烫'].index(unit) % 3
+            gb = float(num) * 1024 ** (_pow - 1)
+            if gb < SIZE_FILTER[0] or SIZE_FILTER[1] != -1 and gb > SIZE_FILTER[1]:
+                logger.debug(f'Torrent {tid} | torrent size {size_str} does not match, passed')
+                return
+
+        if CHECK_PEERLIST or MIN_RE_DL_DAYS > 0:
+            for tr in soup.find('table', {'width': '90%'}):
+                if tr.td.text in ['My private torrent', '私人种子文件', '私人種子文件', 'Ваш личный торрент']:
+                    time_str = tr.find_all('time')
+                    if not time_str:
+                        to_info['last_dl_time'] = None
+                    else:
+                        date = time_str[1].get('title') or time_str[1].text
+                        to_info['last_dl_time'] = time() - self.timedelta(date, self.get_tz(soup))
+            if MIN_RE_DL_DAYS > 0 and to_info['last_dl_time']:
+                if time() - to_info['last_dl_time'] < 86400 * MIN_RE_DL_DAYS:
+                    logger.debug(f"Torrent {tid} | You have downloaded this torrent "
+                                 f"{(time() - to_info['last_dl_time']) // 86400} days before, passed")
+                    return
+
         delta = self.timedelta(soup.time.get('title') or soup.time.text, self.get_tz(soup))
         seeder_count = int(re.search(r'(\d+)', soup.find('div', {'id': 'peercount'}).b.text).group(1))
-        aa = soup.select('a.index')
-        to_name = aa[0].text[5:-8]
-        dl_link = f"https://u2.dmhy.org/{aa[1]['href']}"
         magic_page_soup = None
 
         if delta < MIN_DAY * 86400:
@@ -164,7 +209,7 @@ class CatchMagic:
                 if seeder_count > MAX_SEEDER_NUM:
                     logger.debug(f'Torrent {tid} | seeders > {MAX_SEEDER_NUM}, passed')
                 else:
-                    self.dl_to(to_name, dl_link)
+                    self.dl_to(to_info)
             else:
                 logger.debug(f'Torrent {tid} | time < {MIN_DAY} days, passed')
             return
@@ -187,9 +232,9 @@ class CatchMagic:
                 else:
                     return
 
-        if seeder_count > 0:
+        if seeder_count > 0 or seeder_count == 0 and DOWNLOAD_DEAD_TO:
             if seeder_count <= MAX_SEEDER_NUM:
-                self.dl_to(to_name, dl_link)
+                self.dl_to(to_info)
                 return
             elif DA_QIAO:
                 if not magic_page_soup:
@@ -198,7 +243,7 @@ class CatchMagic:
                 if '搭' in comment and '桥' in comment or '加' in comment and '速' in comment:
                     user = magic_page_soup.select('table.main bdo')[0].text
                     logger.info(f'Torrent {tid} | user {user} is looking for help, downloading...')
-                    self.dl_to(to_name, dl_link)
+                    self.dl_to(to_info)
                     return
             logger.debug(f'Torrent {tid} | seeders > {MAX_SEEDER_NUM}, passed')
         else:
@@ -221,10 +266,10 @@ class CatchMagic:
                             logger.error(er)
                         else:
                             logger.exception(er)
-                with open(f'{DATA_PATH}', 'w', encoding='utf-8') as f:
-                    f.write(f'checked = {self.checked}\n')
                 if error:
                     self.magic_id_0 = id_0
+                with open(f'{DATA_PATH}', 'w', encoding='utf-8') as f:
+                    f.write(f'checked = {self.checked}\nid_0 = {self.magic_id_0}\n')
 
 
 def main(catch):
