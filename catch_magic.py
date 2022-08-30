@@ -1,16 +1,19 @@
 """必须填写 cookie，之后修改 BK_DIR 和 WT_DIR，即可运行"""
 
 import gc
+import json
 import os
 import re
 import shutil
 import pytz
 
 from collections import deque
-from datetime import datetime
-from time import sleep, time
-from requests import get, ReadTimeout
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+from json import JSONDecodeError
+from time import sleep, time
+
+from requests import get, ReadTimeout
 from bs4 import BeautifulSoup
 from loguru import logger
 
@@ -54,12 +57,13 @@ class CatchMagic:
         self.checked, self.magic_id_0 = deque([], maxlen=200), None
         with open(DATA_PATH, 'a', encoding='utf-8'):
             pass
-        with open(DATA_PATH, 'r', encoding='utf-8') as f:
-            for line in f:
-                if line.startswith('checked = '):
-                    self.checked = eval(line[len('checked = '):])
-                if line.startswith('id_0 = '):
-                    self.magic_id_0 = eval(line[len('id_0 = '):])
+        with open(DATA_PATH, 'r', encoding='utf-8') as fp:
+            try:
+                data = json.load(fp)
+                self.checked = deque(data['checked'], maxlen=200)
+                self.magic_id_0 = data['id_0']
+            except JSONDecodeError:
+                pass
         self.first_time = True
 
     def all_effective_magic(self):
@@ -104,8 +108,8 @@ class CatchMagic:
                 index += 1  # 新增魔法数量不小于单页魔法数量
 
         if self.magic_id_0 != id_0:
-            with open(f'{DATA_PATH}', 'w', encoding='utf-8') as f:
-                f.write(f'checked = {self.checked}\nid_0 = {self.magic_id_0}\n')
+            with open(f'{DATA_PATH}', 'w', encoding='utf-8') as fp:
+                json.dump({'checked': list(self.checked), 'id_0': self.magic_id_0}, fp)
         self.first_time = False
 
     def dl_to(self, to_info):
@@ -268,18 +272,17 @@ class CatchMagic:
                             logger.exception(er)
                 if error:
                     self.magic_id_0 = id_0
-                with open(f'{DATA_PATH}', 'w', encoding='utf-8') as f:
-                    f.write(f'checked = {self.checked}\nid_0 = {self.magic_id_0}\n')
+                with open(f'{DATA_PATH}', 'w', encoding='utf-8') as fp:
+                    json.dump({'checked': list(self.checked), 'id_0': self.magic_id_0}, fp)
 
 
+@logger.catch()
 def main(catch):
     for _ in range(RUN_TIMES):
         try:
             catch.run()
         except ReadTimeout as e:
             logger.error(e)
-        except Exception as e:
-            logger.exception(e)
         finally:
             if _ != RUN_TIMES - 1 or not RUN_CRONTAB:
                 gc.collect()
