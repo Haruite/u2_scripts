@@ -10,7 +10,6 @@ import pytz
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-from json import JSONDecodeError
 from time import sleep, time
 
 from requests import get, ReadTimeout
@@ -62,7 +61,7 @@ class CatchMagic:
                 data = json.load(fp)
                 self.checked = deque(data['checked'], maxlen=200)
                 self.magic_id_0 = data['id_0']
-            except JSONDecodeError:
+            except json.JSONDecodeError:
                 pass
         self.first_time = True
 
@@ -228,7 +227,8 @@ class CatchMagic:
                 magic_page_soup = self.get_soup(f'https://u2.dmhy.org/promotion.php?action=detail&id={magic_id}')
                 tbody = magic_page_soup.find('table', {'width': '75%', 'cellpadding': 4}).tbody
                 if self.get_pro(tbody.contents[6].contents[1])[1] == 0:
-                    delay = -self.timedelta(tbody.contents[4].contents[1].string, self.get_tz(magic_page_soup))
+                    time_tag = tbody.contents[4].contents[1].time
+                    delay = -self.timedelta(time_tag.get('title') or time_tag.text, self.get_tz(magic_page_soup))
                     if -1 < delay < EFFECTIVE_DELAY:
                         logger.debug(f'Torrent {tid} | free magic {magic_id} will be effective in {int(delay)}s')
                     else:
