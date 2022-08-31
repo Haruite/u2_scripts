@@ -1,5 +1,6 @@
 # python3.7及以上
 # 依赖：pip3 install PyYAML requests bs4 deluge-client qbittorrent-api loguru pytz
+# Azusa 大佬的 api，见 https://github.com/kysdm/u2_api，自动获取 passkey: https://greasyfork.org/zh-CN/scripts/428545
 
 import asyncio
 import gc
@@ -51,15 +52,15 @@ requests_args = {'cookies': {'nexusphp_u2': ''},
                  }
 
 # ************************可修改配置***********************
-api_token = ''  # api 的 token，填了将默认使用 api 查询种子信息
-get_token = ''  # 未填写 api_token 的情况下，脚本自动获取，获取后默认使用 api 查询种子信息
+api_token = ''  # api 的 token，填了将默认使用 api 查询种子信息，不填就直接从 u2 网页获取信息
+uid = 50096  # 如果填了 api_token，则需要 uid
 magic_downloading = True  # 是否下载中的种子放 2.33x 魔法
 min_rate = 360  # 最小上传速度(KiB/s)
 min_size = 5  # 最小体积(GiB)
 min_d = 180  # 种子最小生存天数
 uc_max = 30000  # 单个魔法最大 uc 使用量
-total_uc_max = 600000  # 24h 内 uc 最大使用量
-interval = 120  # 检查的间隔
+total_uc_max = 200000  # 24h 内 uc 最大使用量
+interval = 60  # 检查的间隔
 
 data_path = f'{os.path.splitext(__file__)[0]}.data.txt'  # 数据路径
 log_path = f'{os.path.splitext(__file__)[0]}.log'  # 日志路径
@@ -259,7 +260,7 @@ class Request:
                     if resp.status < 300:
                         if url.startswith('https://u2.dmhy.org') and method == 'get':
                             logger.debug(f'Downloaded page: {url}')
-                        return await resp.text() if url.startswith('https://u2.dmhy.org') else resp.json()
+                        return await (resp.text() if url.startswith('https://u2.dmhy.org') else resp.json())
                     else:
                         logger.error(f'Incorrect status code <{resp.status}> | {url}')
                         await asyncio.sleep(3)
@@ -319,50 +320,109 @@ class MagicSeed(Request):
 
     async def check_torrent(self, _id, name):
         if not api_token:
-            url = f'https://u2.dmhy.org/torrents.php?search={_id}'
-            params = {'search': _id, 'search_area': 5}
-            page = await self.request(url, params=params)
-            soup = BeautifulSoup(page.replace('\n', ''), 'lxml')
+            await self.info_from_u2(_id, name)
+        else:
+            try:
+                await self.info_from_api(_id, name)
+            except Exception as e:
+                logger.exception(e)
+                await self.info_from_u2(_id, name)
 
-            '''获取时区'''
-            tz_info = soup.find('a', {'href': 'usercp.php?action=tracker#timezone'})['title']
-            pre_suf = [['时区', '，点击修改。'], ['時區', '，點擊修改。'], ['Current timezone is ', ', click to change.']]
-            tz = [tz_info[len(pre):][:-len(suf)].strip() for pre, suf in pre_suf if tz_info.startswith(pre)][0]
+    async def info_from_u2(self, _id, name):
+        url = f'https://u2.dmhy.org/torrents.php?search={_id}'
+        params = {'search': _id, 'search_area': 5}
+        page = await self.request(url, params=params)
+        soup = BeautifulSoup(page.replace('\n', ''), 'lxml')
 
-            table = soup.select('table.torrents')
-            if table:
-                cont = table[0].contents[1].contents
+        '''获取时区'''
+        tz_info = soup.find('a', {'href': 'usercp.php?action=tracker#timezone'})['title']
+        pre_suf = [['时区', '，点击修改。'], ['時區', '，點擊修改。'], ['Current timezone is ', ', click to change.']]
+        tz = [tz_info[len(pre):][:-len(suf)].strip() for pre, suf in pre_suf if tz_info.startswith(pre)][0]
+        timezone = pytz.timezone(tz)
 
-                '''判断种子时间是否小于最小天数'''
-                date = cont[3].time.attrs.get('title') or cont[3].time.get_text(' ')
-                dt = datetime.strptime(date, '%Y-%m-%d %H:%M:%S')
-                delta = time() - pytz.timezone(tz).localize(dt).timestamp()
-                if delta < min_d * 86400:
-                    self.magic_info[_id] = {'ts': int(time())}
+        table = soup.select('table.torrents')
+        if table:
+            cont = table[0].contents[1].contents
+
+            '''判断种子时间是否小于最小天数'''
+            delta = time() - self.ts(cont[3].time.get('title') or cont[3].time.get_text(' '), timezone)
+            if delta < min_d * 86400:
+                self.magic_info[_id] = {'ts': int(time())}
+                return
+
+            '''判断种子是否已有 2.33x 优惠'''
+            tid = int(cont[1].a['href'][15:-6])
+            for img in cont[1].select('tr')[1].td.select('img') or []:
+                if img.get('class') == ['arrowup'] and float(img.next_element.text[:-1].replace(',', '.')) >= 2.33:
+                    logger.info(f'Torrent {_id}, id: {tid}: 2.33x uploaded magic existed!')
+                    time_tag = cont[1].time
+                    if time_tag:
+                        magicst = self.ts(time_tag.get('title') or time_tag.text, timezone) - 86400
+                        self.magic_info[_id] = {'ts': magicst}
+                    else:
+                        self.magic_info[_id] = {'ts': int(time()) + 86400 * 30}
                     return
 
-                '''判断种子是否已有 2.33x 优惠'''
-                tid = int(cont[1].a['href'][15:-6])
-                for img in cont[1].select('tr')[1].td.select('img') or []:
-                    if img.get('class') == ['arrowup'] and img.next_element.text[:-1].replace(',', '.') == '2.33':
-                        logger.info(f'Torrent {_id}, id: {tid}: 2.33x uploaded magic existed!')
-                        pro_end_date = cont[1].time.get('title') or cont[1].time.text
-                        end_time = datetime.strptime(pro_end_date, '%Y-%m-%d %H:%M:%S')
-                        magicst = int(pytz.timezone(tz).localize(end_time).timestamp()) - 86400
-                        self.magic_info[_id] = {'ts': magicst}
-                        return
+            self.to_ids.append((_id, tid))
+        else:
+            logger.error(f'Torrent {_id} , name: {name} was not found in u2...')
+            self.magic_info[_id] = {'ts': int(time()) + 86400 * 3}
 
-                self.to_ids.append((_id, tid))
+    async def info_from_api(self, _id, name):
+        _param = {'uid': uid, 'token': api_token}
 
-            else:
-                '''种子已被删除'''
-                logger.error(f'Torrent {_id} , name: {name} not founded in site...')
-                self.magic_info[_id] = {'ts': int(time()) + 86400 * 3}
+        history_data = await self.request('https://u2.kysdm.com/api/v1/history',
+                                          params={**_param, 'hash': _id})
+        if history_data['data']['history']:
+            tid = history_data['data']['history'][0]['torrent_id']
+            upload_date = history_data['data']['history'][0]['uploaded_at'].replace('T', ' ')
+            if time() - self.ts(upload_date.replace('T', ' ')) < min_d * 86400:
+                self.magic_info[_id] = {'ts': int(time())}
+                return
+
+            res = await self.request('https://u2.kysdm.com/api/v1/promotion_super',
+                                     params={**_param, 'torrent_id': tid})
+            if float(res['data']['promotion_super'][0]['private_ratio'].split(' / ')[0]) >= 2.33:
+                logger.info(f'Torrent {_id}, id: {tid}: 2.33x uploaded magic existed!')
+
+                res = await self.request('https://u2.kysdm.com/api/v1/promotion_specific',
+                                         params={**_param, 'torrent_id': tid})
+                pro_list = res['data']['promotion']
+
+                pro_end_time = time()
+                for pro_data in pro_list:
+                    if float(pro_data['ratio'].split(' / ')[0]) >= 2.33:
+                        if not pro_data['for_user_id'] or pro_data['for_user_id'] == uid:
+                            if not pro_data['expiration_time']:
+                                self.magic_info[_id] = {'ts': int(time()) + 86400 * 30}
+                                break
+                            else:
+                                end_time = self.ts(pro_data['expiration_time'].replace('T', ' '))
+                                if self.ts(pro_data['from_time'].replace('T', ' ')) < time() < end_time:
+                                    if end_time > pro_end_time:
+                                        pro_end_time = end_time
+                self.magic_info[_id] = {'ts': int(pro_end_time) - 86400}
+                return
+
+            self.to_ids.append((_id, tid))
+        else:
+            logger.error(f'Torrent {_id} , name: {name} was not found...')
+            self.magic_info[_id] = {'ts': int(time()) + 86400 * 3}
+
+    @staticmethod
+    def ts(date, tz=pytz.timezone('Asia/Shanghai')):
+        dt = datetime.strptime(date, '%Y-%m-%d %H:%M:%S')
+        return tz.localize(dt).timestamp()
 
     async def send_magic(self, _id, tid):
         page = await self.request(f'https://u2.dmhy.org/promotion.php?action=magic&torrent={tid}')
         soup = BeautifulSoup(page, 'lxml')
-        data = {h['name']: h['value'] for h in soup.find_all('input', {'type': 'hidden'})}
+        hidden = soup.find_all('input', {'type': 'hidden'})
+        if not hidden:
+            logger.error(f'Torrent {_id}, tid: {tid} was not found in site...')
+            self.magic_info[_id] = {'ts': int(time()) + 86400 * 3}
+            return
+        data = {h['name']: h['value'] for h in hidden}
         data.update({'user_other': '', 'start': 0, 'promotion': 8, 'comment': ''})
         data.update({'user': 'SELF', 'hours': 24, 'ur': 2.33, 'dr': 1})
 
