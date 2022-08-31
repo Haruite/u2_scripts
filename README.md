@@ -2,7 +2,7 @@
 **使用方法：安装 python，安装依赖，修改相关选项，运行**
 
 ## 安装 python
-需要 python3.6+，Windows 系统前往官网下载安装包，linux 下输入 python3 --version，如果版本小于 3.6，请自行编译安装
+需要 python3.6+，部分脚本需要 python3.7+，Windows 系统前往官网下载安装包，linux 下输入 python3 --version，如果版本小于 3.6，请自行编译安装
 ### ubuntu/debian 系统下编译 python3.10
 输入以下命令 
 ```
