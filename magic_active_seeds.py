@@ -20,6 +20,7 @@ from functools import wraps
 from ssl import SSLError
 from datetime import datetime
 from time import time, sleep
+from typing import Union, Dict, List
 
 from bs4 import BeautifulSoup
 from loguru import logger
@@ -244,7 +245,8 @@ class Request:
                          'proxy': requests_args.get('proxy')
                          }
 
-    async def request(self, url, method='get', retries=5, **kwargs):
+    async def request(self, url, method='get', retries=5, **kwargs) -> \
+            Union[str, Dict[str, Union[str, Dict[str, List[Dict[str, Union[str, int, None]]]]]]]:
         if url.startswith('https://u2.dmhy.org'):
             [kwargs.setdefault(key, val) for key, val in self.u2_args.items()]
         else:
