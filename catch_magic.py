@@ -1,4 +1,7 @@
-"""必须填写 cookie，之后修改 BK_DIR 和 WT_DIR，即可运行"""
+"""必填参数只有 cookie，之后修改 BK_DIR 和 WT_DIR，即可运行
+依赖 pip3 install requests lxml bs4 loguru pytz
+u2_api: https://github.com/kysdm/u2_api，自动获取 token: https://greasyfork.org/zh-CN/scripts/428545
+"""
 
 import gc
 import json
@@ -18,6 +21,8 @@ from loguru import logger
 
 RUN_CRONTAB = False  # 如果为真，代表脚本不会死循环，运行一次脚本退出，需要以一定间隔运行脚本，主要解决内存问题；否则一直循环运行不退出。
 RUN_TIMES = 1  # RUN_CRONTAB 为真时运行脚本一次 run 函数循环的次数，默认运行一次脚本结束，但如果频繁运行影响性能的话可以改大
+API_TOKEN = ''  # 填了将默认通过 api 获取最新的魔法信息，否则直接从网页获取
+UID = 50096  # 访问 api 需要将此改为自己的 uid，否则不用管
 R_ARGS = {'headers': {'cookie': 'nexusphp_u2=',  # 填网站 cookie，不要空格
                       'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
                                     'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/104.0.5112.81 Safari/537.36'
@@ -65,7 +70,7 @@ class CatchMagic:
                 pass
         self.first_time = True
 
-    def all_effective_magic(self):
+    def info_from_u2(self):
         all_checked = True if self.first_time and not self.magic_id_0 else False
         index = 0
         id_0 = self.magic_id_0
@@ -105,6 +110,40 @@ class CatchMagic:
                 break
             else:
                 index += 1  # 新增魔法数量不小于单页魔法数量
+
+    def info_from_api(self):
+        r_args = {'timeout': R_ARGS.get('timeout'), 'proxies': R_ARGS.get('proxies')}
+        params = {'uid': UID, 'token': API_TOKEN, 'scope': 'public', 'maximum': 30}
+        resp = get('https://u2.kysdm.com/api/v1/promotion', **r_args, params=params).json()
+        pro_list = resp['data']['promotion']
+        if MAGIC_SELF:
+            params['scope'] = 'private'
+            resp1 = get('https://u2.kysdm.com/api/v1/promotion', **r_args, params=params).json()
+            pro_list.extend([pro_data for pro_data in resp1['data']['promotion'] if pro_data['for_user_id'] == UID])
+
+        for pro_data in pro_list:
+            magic_id = pro_data['promotion_id']
+            tid = pro_data['torrent_id']
+            if magic_id == self.magic_id_0:
+                break
+            if magic_id not in self.checked:
+                if self.first_time and not self.magic_id_0:
+                    self.checked.append(magic_id)
+                else:
+                    yield magic_id, tid
+        self.magic_id_0 = pro_list[0]['promotion_id']
+
+    def all_effective_magic(self):
+        id_0 = self.magic_id_0
+
+        if not API_TOKEN:
+            yield from self.info_from_u2()
+        else:
+            try:
+                yield from self.info_from_api()
+            except Exception as e:
+                logger.exception(e)
+                yield from self.info_from_u2()
 
         if self.magic_id_0 != id_0:
             with open(f'{DATA_PATH}', 'w', encoding='utf-8') as fp:
