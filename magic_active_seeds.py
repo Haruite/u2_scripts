@@ -354,7 +354,7 @@ class MagicSeed(Request):
             tid = int(cont[1].a['href'][15:-6])
             for img in cont[1].select('tr')[1].td.select('img') or []:
                 if img.get('class') == ['arrowup'] and float(img.next_element.text[:-1].replace(',', '.')) >= 2.33:
-                    logger.info(f'Torrent {_id}, id: {tid}: 2.33x uploaded magic existed!')
+                    logger.info(f'Torrent {_id}, id: {tid}: 2.33x upload magic existed!')
                     time_tag = cont[1].time
                     if time_tag:
                         magicst = self.ts(time_tag.get('title') or time_tag.text, timezone) - 86400
@@ -383,7 +383,7 @@ class MagicSeed(Request):
             res = await self.request('https://u2.kysdm.com/api/v1/promotion_super',
                                      params={**_param, 'torrent_id': tid})
             if float(res['data']['promotion_super'][0]['private_ratio'].split(' / ')[0]) >= 2.33:
-                logger.info(f'Torrent {_id}, id: {tid}: 2.33x uploaded magic existed!')
+                logger.info(f'Torrent {_id}, id: {tid}: 2.33x upload magic existed!')
 
                 res = await self.request('https://u2.kysdm.com/api/v1/promotion_specific',
                                          params={**_param, 'torrent_id': tid})
