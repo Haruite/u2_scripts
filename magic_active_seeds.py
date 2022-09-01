@@ -1,6 +1,6 @@
 # python3.7及以上
 # 依赖：pip3 install PyYAML requests bs4 deluge-client qbittorrent-api loguru pytz
-# Azusa 大佬的 api，见 https://github.com/kysdm/u2_api，自动获取 passkey: https://greasyfork.org/zh-CN/scripts/428545
+# Azusa 大佬的 api，见 https://github.com/kysdm/u2_api，自动获取 token: https://greasyfork.org/zh-CN/scripts/428545
 
 import asyncio
 import gc
@@ -265,7 +265,7 @@ class Request:
                         logger.error(f'Incorrect status code <{resp.status}> | {url}')
                         await asyncio.sleep(3)
             except Exception as e:
-                if i == retries - 1:
+                if i == retries:
                     logger.error(e)
                 elif isinstance(e, asyncio.TimeoutError):
                     kwargs['timeout'] += 20
@@ -375,7 +375,7 @@ class MagicSeed(Request):
                                           params={**_param, 'hash': _id})
         if history_data['data']['history']:
             tid = history_data['data']['history'][0]['torrent_id']
-            upload_date = history_data['data']['history'][0]['uploaded_at'].replace('T', ' ')
+            upload_date = history_data['data']['history'][0]['uploaded_at']
             if time() - self.ts(upload_date.replace('T', ' ')) < min_d * 86400:
                 self.magic_info[_id] = {'ts': int(time())}
                 return
@@ -469,7 +469,6 @@ class MagicSeed(Request):
 class Run(MagicSeed):
     def __init__(self):
         super(Run, self).__init__(None)
-        logger.add(level='DEBUG', sink=log_path, rotation="5 MB")
         with open(data_path, 'a', encoding='utf-8'):
             pass
         with open(data_path, 'r', encoding='utf-8') as fp:
@@ -477,15 +476,6 @@ class Run(MagicSeed):
                 self.magic_info = json.load(fp)
             except json.JSONDecodeError:
                 pass
-        for client_info in yaml.load(clients_info, yaml.FullLoader):
-            c_type = client_info['type']
-            del client_info['type']
-            if c_type in ['de', 'Deluge', 'deluge']:
-                MagicSeed(Deluge(**client_info))
-            elif c_type in ['qb', 'QB', 'qbittorrent', 'qBittorrent']:
-                MagicSeed(Qbittorrent(**client_info))
-        if sys.platform == 'win32':
-            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
     def run(self):
         with ThreadPoolExecutor(max_workers=len(self.instances)) as executor:
@@ -498,6 +488,19 @@ class Run(MagicSeed):
         logger.exception(exc_val)
         os._exit(0)
 
+
+logger.add(level='DEBUG', sink=log_path, rotation="5 MB")
+
+for client_info in yaml.load(clients_info, yaml.FullLoader):
+    c_type = client_info['type']
+    del client_info['type']
+    if c_type in ['de', 'Deluge', 'deluge']:
+        MagicSeed(Deluge(**client_info))
+    elif c_type in ['qb', 'QB', 'qbittorrent', 'qBittorrent']:
+        MagicSeed(Qbittorrent(**client_info))
+
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 with Run() as r:
     r.run()
