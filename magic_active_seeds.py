@@ -299,20 +299,13 @@ class MagicSeed(Request):
         for _id, data in self.client.active_torrents_info(
                 ['name', 'tracker', 'total_size', 'upload_payload_rate', 'state']).items():
 
-            if _id in self.magic_info:
-                if int(time()) - self.magic_info[_id]['ts'] < 86400:  # 魔法还在有效期内则不加入
-                    continue
-            if not data['tracker'] or 'daydream.dmhy.best' not in data['tracker'] and \
-                    'tracker.dmhy.org' not in data['tracker']:  # 过滤不是 U2 的种子
-                continue
-            if not magic_downloading and data['state'] in ['Downloading', 'downloading']:  # 过滤下载中的种子
-                continue
-            if data['upload_payload_rate'] < min_rate * 1024:
-                continue
-            if data['total_size'] < min_size * 1024 ** 3:
-                continue
-
-            tasks.append(self.check_torrent(_id, data['name']))
+            if _id not in self.magic_info or int(time()) - self.magic_info[_id]['ts'] >= 86400:  # 魔法还在有效期内则不加入
+                if data['tracker'] and ('daydream.dmhy.best' in data['tracker']
+                                        or 'tracker.dmhy.org' in data['tracker']):  # 过滤不是 U2 的种子
+                    if magic_downloading or data['state'] not in ['Downloading', 'downloading']:  # 过滤下载中的种子
+                        if data['upload_payload_rate'] >= min_rate * 1024:
+                            if data['total_size'] >= min_size * 1024 ** 3:
+                                tasks.append(self.check_torrent(_id, data['name']))
 
         await asyncio.gather(*tasks)
 
@@ -331,7 +324,7 @@ class MagicSeed(Request):
                 await self.info_from_u2(_id, name)
 
     async def info_from_u2(self, _id, name):
-        url = f'https://u2.dmhy.org/torrents.php?search={_id}'
+        url = f'https://u2.dmhy.org/torrents.php'
         params = {'search': _id, 'search_area': 5}
         page = await self.request(url, params=params)
         soup = BeautifulSoup(page.replace('\n', ''), 'lxml')
