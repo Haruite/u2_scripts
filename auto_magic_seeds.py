@@ -241,18 +241,27 @@ class Qbittorrent(qbittorrentapi.Client, BtClient):
 
 
 class MagicInfo(UserDict):
+    def __init__(self, dic=None, **kwargs):
+        super(MagicInfo, self).__init__(dic, **kwargs)
+        self.c = False
+
     def __setitem__(self, key, value):
-        super(MagicInfo, self).__setitem__(key, value)
-        self.save()
+        if key in self.data:
+            if 'uc' in value and 'uc' in self.data[key]:
+                value['uc'] += self.data[key]['uc']
+            self.data[key].update(value)
+        else:
+            self.data[key] = value
+        self.c = True
 
     def __set__(self, instance, value):
         self.data = value
 
     def del_unused(self):
         for _id in list(self.data.keys()):
-            if int(time()) - self.data[_id]['ts'] > 86400:
+            if 'ts' not in self.data[_id] or int(time()) - self.data[_id]['ts'] > 86400:
                 del self.data[_id]
-                self.save()
+                self.c = True
 
     def cost(self):
         uc_cost = 0
@@ -261,15 +270,18 @@ class MagicInfo(UserDict):
         return uc_cost
 
     def save(self):
-        with open(CONFIG['data_path'], 'w', encoding='utf-8') as fp:
-            json.dump(self.data, fp)
+        if self.c:
+            with open(CONFIG['data_path'], 'w', encoding='utf-8') as fp:
+                json.dump(self.data, fp)
+            self.c = False
 
     def min_secs(self):
         total = self.cost()
         for _id, data in self.data.items():
             total -= data.get('uc') or 0
             if total <= CONFIG['total_uc_max']:
-                return data['ts'] + 86400 - int(time())
+                if 'ts' in data:
+                    return data['ts'] + 86400 - int(time())
 
 
 class Request:
@@ -332,7 +344,8 @@ class MagicSeed(Request):
         for _id, data in self.client.active_torrents_info(
                 ['name', 'tracker', 'total_size', 'upload_payload_rate', 'state']).items():
 
-            if _id not in self.magic_info or int(time()) - self.magic_info[_id]['ts'] >= 86400:  # 魔法还在有效期内则不加入
+            if _id not in self.magic_info or 'ts' in self.magic_info[_id]\
+                    and int(time()) - self.magic_info[_id]['ts'] >= 86400:  # 魔法还在有效期内则不加入
                 if data['tracker'] and ('daydream.dmhy.best' in data['tracker']
                                         or 'tracker.dmhy.org' in data['tracker']):  # 过滤不是 U2 的种子
                     magic_downloading = CONFIG['magic_for_self']['magic_downloading']
@@ -347,6 +360,7 @@ class MagicSeed(Request):
         magic_tasks = [self.send_magic(__id, _tid, {'user': 'SELF', 'hours': 24, 'ur': 2.33, 'dr': 1})
                        for __id, _tid, ur_233 in res if _tid and __id not in self.magic_info]
         await asyncio.gather(*magic_tasks)
+        self.magic_info.save()
 
     async def check_torrent(self, _id, name):
         if not CONFIG['api_token']:
@@ -476,6 +490,7 @@ class MagicSeed(Request):
                     logger.warning(f'24h ucoin usage exceeded, Waiting for {secs}s ------ | data {_data}')
                     await asyncio.sleep(secs)
                     return
+                self.magic_info[_id] = {'uc': uc}
 
                 url = f'https://u2.dmhy.org/promotion.php?action=magic&torrent={tid}'
                 p2 = await self.request(url, method='post', retries=0, data=data)
@@ -483,12 +498,10 @@ class MagicSeed(Request):
                     logger.info(f"Sent a {data['ur']}x upload and {data['dr']}x download "
                                 f"magic to torrent {_id}, tid: {tid}, user {data['user'].lower()}, "
                                 f"duration {data['hours']}h, uc usage {uc}, 24h total {self.magic_info.cost()}")
-                    if '_id' in self.magic_info and 'uc' in self.magic_info[_id]:
-                        self.magic_info[_id] = {'ts': int(time()), 'uc': uc + self.magic_info[_id]['uc']}
-                    else:
-                        self.magic_info[_id] = {'ts': int(time()), 'uc': uc}
+                    self.magic_info[_id] = {'ts': int(time())}
                 else:
                     logger.error(f'Failed to send magic to torrent {_id}, id: {tid} | data: {_data}')
+                    self.magic_info[_id] = {'uc': -uc}
 
         except Exception as e:
             logger.exception(e)
@@ -539,13 +552,14 @@ class Run(MagicSeed):
 
         tasks = [self.check_torrent(_id, info[_id]['name']) for _id in _id_list]
         res = await asyncio.gather(*tasks)
+        self.magic_info.del_unused()
 
         magic_tasks = []
         hr = CONFIG['magic_for_all']['hours']
         for __id, _tid, ur_233 in res:
             if _tid:
-                if ur_233 and not self.magic_info[__id]['ts'] + 86400 - time()\
-                                  < CONFIG['magic_for_all']['min_rm_hr'] * 3600:
+                if ur_233 and not ('ts' in self.magic_info[__id] and self.magic_info[__id]['ts']
+                                   + 86400 - time() < CONFIG['magic_for_all']['min_rm_hr'] * 3600):
                     magic_tasks.append(self.send_magic(__id, _tid, {'user': 'ALL', 'hours': hr, 'ur': 1, 'dr': 0}))
                 elif CONFIG['magic_for_all']['233_all']:
                     magic_tasks.append(self.send_magic(__id, _tid, {'user': 'ALL', 'hours': hr, 'ur': 2.33, 'dr': 0}))
@@ -554,6 +568,7 @@ class Run(MagicSeed):
                     magic_tasks.append(self.send_magic(__id, _tid, {'user': 'SELF', 'hours': hr, 'ur': 2.33, 'dr': 1}))
 
         await asyncio.gather(*magic_tasks)
+        self.magic_info.save()
 
     def magic_for_all(self):
         loop = asyncio.new_event_loop()
