@@ -171,7 +171,7 @@ class BtClient(metaclass=ABCMeta):
 
     @abstractmethod
     def seeding_torrents_info(self, keys):
-        """获取所有种子信息"""
+        """获取所有做种中的种子信息"""
         pass
 
 
@@ -449,6 +449,7 @@ class MagicSeed(Request):
             return
         data = {h['name']: h['value'] for h in hidden}
         data.update({'user_other': '', 'start': 0, 'promotion': 8, 'comment': ''})
+        data.update({'user': 'SELF', 'hours': 24, 'ur': 2.33, 'dr': 1})
         data.update(_data)
 
         try:
@@ -510,10 +511,14 @@ class Run(MagicSeed):
     async def main(self):
         info = {}
         for client in self.clients:
-            info.update(client.seeding_torrents_info(['name', 'total_seeds']))
+            info.update(client.seeding_torrents_info(['name', 'total_seeds', 'tracker']))
 
-        _id_list = [_id for _id, data in info.items()
-                    if data['total_seeds'] <= CONFIG['magic_for_all']['max_seeder_num']]
+        _id_list = []
+        for _id, data in info.items():
+            if data['tracker'] and ('daydream.dmhy.best' in data['tracker']
+                                    or 'tracker.dmhy.org' in data['tracker']):
+                if data['total_seeds'] <= CONFIG['magic_for_all']['max_seeder_num']:
+                    _id_list.append(_id)
 
         num = CONFIG['magic_for_all']['torrent_num']
         if len(_id_list) >= num:
