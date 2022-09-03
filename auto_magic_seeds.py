@@ -1,9 +1,11 @@
 """python3.7及以上
+脚本有两个功能，一个是给自己有上传速度的种子放魔法，一个是给孤种放地图炮吸引别人下载
+支持客户端 deluge 和 qbittorrent，如果需要使用其他客户端，需要继承 BTClient 类，按要求实现抽象方法，
+然后在 CONFIG 中加入相关信息，最后修改 with 语句之后初始化对象的内容，其他地方不需要改动
 依赖：pip3 install PyYAML requests bs4 deluge-client qbittorrent-api loguru pytz
 Azusa 大佬的 api，见 https://github.com/kysdm/u2_api，自动获取 token: https://greasyfork.org/zh-CN/scripts/428545
-脚本用两个功能，一个是给自己有上传速度的种子放魔法，一个是给孤种放地图炮吸引别人下载
 因为使用了异步，放魔法速度很快，不会有反应时间，请使用前仔细检查配置
-修改后的脚本应该叫 magic_seed.py，不过为了 commit 能显示区别还是没改文件名"""
+"""
 
 import asyncio
 import gc
@@ -122,7 +124,6 @@ class CheckKeys:
                             raise TypeError(f'Key "{key}" is not supported. Check return value {res}')
 
             return res
-
         return wrapper
 
 
