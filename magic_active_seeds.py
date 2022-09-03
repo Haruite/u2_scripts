@@ -263,6 +263,13 @@ class MagicInfo(UserDict):
         with open(CONFIG['data_path'], 'w', encoding='utf-8') as fp:
             json.dump(self.data, fp)
 
+    def min_secs(self):
+        total = self.cost()
+        for _id, data in self.data.items():
+            total -= data.get('uc') or 0
+            if total <= CONFIG['total_uc_max']:
+                return data['ts'] + 86400 - int(time())
+
 
 class Request:
     def __init__(self):
@@ -464,7 +471,9 @@ class MagicSeed(Request):
                     return
 
                 if self.magic_info.cost() > CONFIG['total_uc_max']:
-                    logger.warning(f'24h ucoin usage exceeded, Waiting ------ | data {_data}')
+                    secs = min(self.magic_info.min_secs(), 1800)
+                    logger.warning(f'24h ucoin usage exceeded, Waiting for {secs}s ------ | data {_data}')
+                    await asyncio.sleep(secs)
                     return
 
                 url = f'https://u2.dmhy.org/promotion.php?action=magic&torrent={tid}'
