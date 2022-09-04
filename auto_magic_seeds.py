@@ -481,13 +481,13 @@ class MagicSeed(Request):
                 uc = int(float(BeautifulSoup(res_json['price'], 'lxml').span['title'].replace(',', '')))
 
                 if uc > CONFIG['uc_max']:
-                    logger.warning(f'Torrent id: {tid} cost {uc}uc, too expensive | data {_data}')
+                    logger.warning(f'Torrent id: {tid} cost {uc}uc, too expensive | data: {data}')
                     self.magic_info[_id] = {'ts': int(time())}
                     return
 
                 if self.magic_info.cost() > CONFIG['total_uc_max']:
                     secs = min(self.magic_info.min_secs(), 1800)
-                    logger.warning(f'24h ucoin usage exceeded, Waiting for {secs}s ------ | data {_data}')
+                    logger.warning(f'24h ucoin usage exceeded, Waiting for {secs}s ------ | data: {data}')
                     await asyncio.sleep(secs)
                     return
                 self.magic_info[_id] = {'uc': uc}
@@ -500,8 +500,10 @@ class MagicSeed(Request):
                                 f"duration {data['hours']}h, uc usage {uc}, 24h total {self.magic_info.cost()}")
                     self.magic_info[_id] = {'ts': int(time())}
                 else:
-                    logger.error(f'Failed to send magic to torrent {_id}, id: {tid} | data: {_data}')
+                    logger.error(f'Failed to send magic to torrent {_id}, id: {tid} | data: {data}')
                     self.magic_info[_id] = {'uc': -uc}
+                if self.magic_info.cost() > CONFIG['total_uc_max']:
+                    self.magic_info.save()
 
         except Exception as e:
             logger.exception(e)
