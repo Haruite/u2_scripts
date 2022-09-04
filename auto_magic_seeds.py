@@ -1,8 +1,7 @@
 """python3.7及以上
 脚本有两个功能，一个是给自己有上传速度的种子放魔法，一个是给孤种放地图炮吸引别人下载
-支持客户端 deluge 和 qbittorrent，如果需要使用其他客户端，需要继承 BTClient 类，按要求实现抽象方法，
-然后在 CONFIG 中加入相关信息，最后修改 with 语句之后初始化对象的内容，其他地方不需要改动
-依赖：pip3 install PyYAML requests bs4 deluge-client qbittorrent-api loguru pytz
+支持客户端 deluge, qbittorrent, transmission 和 rutorrent
+依赖：pip3 install PyYAML requests bs4 deluge-client qbittorrent-api transmission-rpc loguru pytz
 Azusa 大佬的 api，见 https://github.com/kysdm/u2_api，自动获取 token: https://greasyfork.org/zh-CN/scripts/428545
 因为使用了异步，放魔法速度很快，不会有反应时间，请使用前仔细检查配置
 """
@@ -17,11 +16,13 @@ import sys
 
 import aiohttp
 import pytz
+import requests
 import qbittorrentapi
 import transmission_rpc
 
 from abc import abstractmethod, ABCMeta
 from collections import UserDict
+from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 from ssl import SSLError
 from datetime import datetime
@@ -30,7 +31,6 @@ from typing import Union, Dict, List
 
 from bs4 import BeautifulSoup
 from loguru import logger
-from concurrent.futures import ThreadPoolExecutor
 
 from deluge_client import FailedToReconnectException, LocalDelugeRPCClient
 from qbittorrentapi.exceptions import APIConnectionError, HTTPError
@@ -48,13 +48,20 @@ CONFIG = {  # 应该跟 json 差不多，放到 ide 里方便能看出错误
                       'host': 'http://127.0.0.1',  # host，最好带上 http 或者 https
                       'port': 8080,  # webui 端口
                       'username': '',  # web 用户名
-                      'password': ''  # web 密码
+                      'password': '',  # web 密码
+                      # 'verify': True  # 验证 https 证书
                       },
                      {'type': 'transmission',  # 'tr', 'Transmission', 'transmission'
                       'host': '127.0.0.1',  # IP
                       'port': 9091,  # webui 端口
                       'username': '',  # web 用户名
                       'password': ''  # web 密码
+                      },
+                     {'type': 'rutorrent',  # 'ru', 'Rutorrent', 'rutorrent'
+                      'url': 'https://127.0.0.1/rutorrent',  # rtinst 安装完是这样的
+                      'username': '',  # web 用户名
+                      'password': '',  # web 密码
+                      'verify': False  # 验证 https 证书
                       }
                      ],
     'requests_args': {'cookies': {'nexusphp_u2': ''  # 网站 cookie
@@ -126,7 +133,7 @@ class CheckKeys:
                     for key, val in data.items():
                         if key in self.int_keys and not isinstance(val, int):
                             raise TypeError(f'The value of "{key}" should be int type')
-                        elif key in self.str_keys and not isinstance(val, str):
+                        elif key in self.str_keys and not isinstance(val, str) and not (key == 'tracker' and not val):
                             raise TypeError(f'The value of "{key}" should be str type')
                         if key not in keys:
                             raise TypeError(f'Key "{key}" is not supported. Check return value {res}')
@@ -195,7 +202,6 @@ class Deluge(LocalDelugeRPCClient, BtClient):
             for i in range(6):
                 try:
                     self.reconnect()
-                    logger.debug(f'Connected to deluge client on {self.host}:{self.port}')
                     break
                 except SSLError:
                     sleep(0.3 * 2 ** i)
@@ -205,7 +211,9 @@ class Deluge(LocalDelugeRPCClient, BtClient):
             logger.error(f'Failed to reconnect to deluge client on {self.host}:{self.port}')
         except TimeoutError:
             logger.error(f'Timeout when connecting to deluge client on {self.host}:{self.port}')
-        except Exception:
+        except Exception as e:
+            if e.__class__.__name__ == 'BadLoginError':
+                logger.error(f'Failed to connect to deluge client on {self.host}:{self.port}, Password does not match')
             raise
 
     def active_torrents_info(self, keys):
@@ -219,9 +227,10 @@ class Qbittorrent(qbittorrentapi.Client, BtClient):
     de_key_to_qb = {'name': 'name', 'tracker': 'tracker', 'total_size': 'size',
                     'upload_payload_rate': 'upspeed', 'state': 'state', 'total_seeds': 'num_complete'}
 
-    def __init__(self, host='http://127.0.0.1', port=8080, username='', password=''):
+    def __init__(self, host='http://127.0.0.1', port=8080, username='', password='', **kwargs):
         super().__init__(host=host, port=port, username=username, password=password,
-                         REQUESTS_ARGS={'timeout': 10}, FORCE_SCHEME_FROM_HOST=True)
+                         REQUESTS_ARGS={'timeout': 10}, FORCE_SCHEME_FROM_HOST=True,
+                         VERIFY_WEBUI_CERTIFICATE=True if 'verify' not in kwargs else False)
 
     def call(self, method, *args, **kwargs):
         try:
@@ -279,6 +288,73 @@ class Transmission(transmission_rpc.Client, BtClient):
     def seeding_torrents_info(self, keys):
         return {torrent.hashString: self.keys_to_dict(keys, torrent) for torrent in self.call('get_torrents')
                 if torrent.status == 'seeding'}
+
+
+class Rutorrent(BtClient):
+    tr_keys = {'tracker', 'total_seeds'}
+
+    def __init__(self, url, username, password, verify):
+        self.url = url
+        self.auth = (username, password)
+        self.verify = verify
+
+    def call(self, method, *args, **kwargs):
+        data = {'mode': method}
+        data.update(kwargs)
+        res = ''
+        for i in range(6):
+            try:
+                res = requests.post(f"{self.url.rstrip('/')}/plugins/httprpc/action.php",
+                                    auth=self.auth, data=data, verify=self.verify).text
+                return json.loads(res)
+            except json.JSONDecodeError as e:
+                if 'Authorization Required' in res:
+                    logger.error(f'Failed to connect to rutorrent instance via {self.url}, '
+                                 f'check your username and password.')
+                    return
+                else:
+                    logger.error(e)
+                sleep(0.3 * 2 ** i)
+
+    @staticmethod
+    def info_from_list(keys, lst):
+        res = {}
+        if 'name' in keys:
+            res['name'] = lst[4]
+        if 'total_size' in keys:
+            res['total_size'] = int(lst[5])
+        if 'state' in keys:
+            res['state'] = 'seeding' if int(lst[19]) == 0 else 'downloading'
+        if 'upload_payload_rate' in keys:
+            res['upload_payload_rate'] = int(lst[11])
+        return res
+
+    def update_tracker_info(self, info, lst):
+        res = {}
+        for _id, data in self.call('trkall').items():
+            if _id.lower() in info:
+                update = {'tracker': None, 'total_seeds': 99999} if not data else {
+                    'tracker': data[0][0], 'total_seeds': int(data[0][4])}
+                info[_id.lower()].update({key: update[key] for key in lst})
+        return res
+
+    def active_torrents_info(self, keys):
+        res = {}
+        for _id, data in self.call('list')['t'].items():
+            if int(data[11]) > 0:
+                res[_id.lower()] = self.info_from_list(keys, data)
+        if set(keys) & self.tr_keys:
+            self.update_tracker_info(res, set(keys) & self.tr_keys)
+        return res
+
+    def seeding_torrents_info(self, keys):
+        res = {}
+        for _id, data in self.call('list')['t'].items():
+            if int(data[19]) == 0:
+                res[_id.lower()] = self.info_from_list(keys, data)
+        if set(keys) & self.tr_keys:
+            self.update_tracker_info(res, set(keys) & self.tr_keys)
+        return res
 
 
 class MagicInfo(UserDict):
@@ -648,17 +724,17 @@ logger.add(level='DEBUG', sink=CONFIG['log_path'], rotation="5 MB")
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
+class_to_name = {Deluge: ['de', 'Deluge', 'deluge'],
+                 Qbittorrent: ['qb', 'QB', 'qbittorrent', 'qBittorrent'],
+                 Transmission: ['tr', 'Transmission', 'transmission'],
+                 Rutorrent: ['ru', 'Rutorrent', 'rutorrent']}
+name_to_class = {name: cls for cls, lst in class_to_name.items() for name in lst}
+
+
 with Run() as r:
     for client_info in CONFIG['clients_info']:
         c_type = client_info['type']
         del client_info['type']
-        if c_type in ['de', 'Deluge', 'deluge']:
-            MagicSeed(Deluge(**client_info))
-            r.clients.append(Deluge(**client_info))
-        elif c_type in ['qb', 'QB', 'qbittorrent', 'qBittorrent']:
-            MagicSeed(Qbittorrent(**client_info))
-            r.clients.append(Qbittorrent(**client_info))
-        elif c_type in ['tr', 'Transmission', 'transmission']:
-            MagicSeed(Transmission(**client_info))
-            r.clients.append(Transmission(**client_info))
+        MagicSeed(name_to_class[c_type](**client_info))
+        r.clients.append(name_to_class[c_type](**client_info))
     r.run()
