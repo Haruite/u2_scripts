@@ -1,7 +1,7 @@
 """python3.7及以上
 脚本有两个功能，一个是给自己有上传速度的种子放魔法，一个是给孤种放地图炮吸引别人下载
 支持客户端 deluge, qbittorrent, transmission 和 rutorrent
-依赖：pip3 install PyYAML requests bs4 deluge-client qbittorrent-api transmission-rpc loguru pytz
+依赖：pip3 install PyYAML requests bs4 lxml deluge-client qbittorrent-api transmission-rpc loguru pytz
 Azusa 大佬的 api，见 https://github.com/kysdm/u2_api，自动获取 token: https://greasyfork.org/zh-CN/scripts/428545
 因为使用了异步，放魔法速度很快，不会有反应时间，请使用前仔细检查配置
 """
@@ -156,16 +156,16 @@ class BtClient(metaclass=ABCMeta):
                 'upload_payload_rate',  # int 类型，上传速度 (B / s)
                 )
 
-    wrapped_class = []
+    wrapped_classes = []
 
     def __new__(cls, *args, **kwargs):
         ins = super(BtClient, cls).__new__(cls)
         subclass = ins.__class__
 
-        if subclass not in cls.wrapped_class:
+        if subclass not in cls.wrapped_classes:
             for function in ('seeding_torrents_info', 'active_torrents_info'):
                 setattr(subclass, function, check_keys(getattr(subclass, function)))
-            cls.wrapped_class.append(subclass)
+            cls.wrapped_classes.append(subclass)
         return ins
 
     @abstractmethod
@@ -214,7 +214,8 @@ class Deluge(LocalDelugeRPCClient, BtClient):
         except Exception as e:
             if e.__class__.__name__ == 'BadLoginError':
                 logger.error(f'Failed to connect to deluge client on {self.host}:{self.port}, Password does not match')
-            raise
+            else:
+                raise
 
     def active_torrents_info(self, keys):
         return self.call('core.get_torrents_status', {'state': 'Active'}, keys)
@@ -230,7 +231,7 @@ class Qbittorrent(qbittorrentapi.Client, BtClient):
     def __init__(self, host='http://127.0.0.1', port=8080, username='', password='', **kwargs):
         super().__init__(host=host, port=port, username=username, password=password,
                          REQUESTS_ARGS={'timeout': 10}, FORCE_SCHEME_FROM_HOST=True,
-                         VERIFY_WEBUI_CERTIFICATE=True if 'verify' not in kwargs else False)
+                         VERIFY_WEBUI_CERTIFICATE=True if 'verify' not in kwargs else kwargs['verify'])
 
     def call(self, method, *args, **kwargs):
         try:
@@ -330,13 +331,11 @@ class Rutorrent(BtClient):
         return res
 
     def update_tracker_info(self, info, lst):
-        res = {}
         for _id, data in self.call('trkall').items():
             if _id.lower() in info:
                 update = {'tracker': None, 'total_seeds': 99999} if not data else {
                     'tracker': data[0][0], 'total_seeds': int(data[0][4])}
                 info[_id.lower()].update({key: update[key] for key in lst})
-        return res
 
     def active_torrents_info(self, keys):
         res = {}
