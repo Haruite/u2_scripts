@@ -18,6 +18,7 @@ import sys
 import aiohttp
 import pytz
 import qbittorrentapi
+import transmission_rpc
 
 from abc import abstractmethod, ABCMeta
 from collections import UserDict
@@ -33,18 +34,25 @@ from concurrent.futures import ThreadPoolExecutor
 
 from deluge_client import FailedToReconnectException, LocalDelugeRPCClient
 from qbittorrentapi.exceptions import APIConnectionError, HTTPError
+from transmission_rpc.error import TransmissionTimeoutError, TransmissionConnectError
 
 
 CONFIG = {  # 应该跟 json 差不多，放到 ide 里方便能看出错误
-    'clients_info': [{'type': 'deluge',   # de, deluge
+    'clients_info': [{'type': 'deluge',  # 'de', 'Deluge', 'deluge'
                       'host': '127.0.0.1',  # IP
                       'port': 58846,  # daemon 端口
-                      'username': '',  # 本地可以设置跳过用户名和密码
+                      'username': '',  # 本地客户端可以不填用户名和密码
                       'password': ''  # cat ~/.config/deluge/auth
                       },  # 多个用逗号隔开
-                     {'type': 'qbittorrent',  # qb, qbittorrent
-                      'host': 'http://127.0.0.1',  # IP
+                     {'type': 'qbittorrent',  # 'qb', 'QB', 'qbittorrent', 'qBittorrent'
+                      'host': 'http://127.0.0.1',  # host，最好带上 http 或者 https
                       'port': 8080,  # webui 端口
+                      'username': '',  # web 用户名
+                      'password': ''  # web 密码
+                      },
+                     {'type': 'transmission',  # 'tr', 'Transmission', 'transmission'
+                      'host': '127.0.0.1',  # IP
+                      'port': 9091,  # webui 端口
                       'username': '',  # web 用户名
                       'password': ''  # web 密码
                       }
@@ -187,16 +195,16 @@ class Deluge(LocalDelugeRPCClient, BtClient):
             for i in range(6):
                 try:
                     self.reconnect()
-                    logger.debug(f'Connected to deluge client on {self.host}')
+                    logger.debug(f'Connected to deluge client on {self.host}:{self.port}')
                     break
                 except SSLError:
                     sleep(0.3 * 2 ** i)
         try:
             return super().call(method, *args, **kwargs)
         except FailedToReconnectException:
-            logger.error(f'Failed to reconnect to deluge client on {self.host}')
+            logger.error(f'Failed to reconnect to deluge client on {self.host}:{self.port}')
         except TimeoutError:
-            logger.error(f'Timeout when connecting to deluge client on {self.host}')
+            logger.error(f'Timeout when connecting to deluge client on {self.host}:{self.port}')
         except Exception:
             raise
 
@@ -219,9 +227,9 @@ class Qbittorrent(qbittorrentapi.Client, BtClient):
         try:
             return self.__getattribute__(method)(*args, **kwargs, _retries=5)
         except HTTPError as e:
-            logger.error(f'Failed to connect to qbittorrent on {self.host} due to http error: {e}')
+            logger.error(f'Failed to connect to qbittorrent on {self.host}:{self.port} due to http error: {e}')
         except APIConnectionError as e:
-            logger.error(f'Failed to connect to qbittorrent on {self.host} due to '
+            logger.error(f'Failed to connect to qbittorrent on {self.host}:{self.port} due to '
                          f'qbittorrentapi.exceptions.APIConnectionError:  {e}')
 
     def fix_return_value(self, lst, keys):
@@ -238,6 +246,39 @@ class Qbittorrent(qbittorrentapi.Client, BtClient):
 
     def seeding_torrents_info(self, keys):
         return self.fix_return_value(self.call('torrents_info', status_filter=['seeding']), keys)
+
+
+class Transmission(transmission_rpc.Client, BtClient):
+    de_key_to_tr = {'name': 'name', 'total_size': 'total_size',
+                    'upload_payload_rate': 'rateUpload', 'state': 'status'}
+
+    def __init__(self, host='http://127.0.0.1', port=9091, username='', password=''):
+        super().__init__(host=host, port=port, username=username, password=password, timeout=10)
+        self.host = host
+        self.port = port
+
+    def call(self, method, *args, **kwargs):
+        try:
+            return self.__getattribute__(method)(*args, **kwargs)
+            # 这个 rpc 模块自动尝试 10 次不好改
+        except (TransmissionTimeoutError, TransmissionConnectError) as e:
+            logger.error(f'Error when connect to transmission client on {self.host}:{self.port} | {e}')
+
+    def keys_to_dict(self, keys, torrent):
+        res = {key: torrent.__getattribute__(self.de_key_to_tr[key]) for key in keys if key in self.de_key_to_tr}
+        if 'tracker' in keys:
+            res['tracker'] = torrent.trackers[0]['announce'] if torrent.trackers else None
+        if 'total_seeds' in keys:
+            res['total_seeds'] = torrent.trackerStats[0]['seederCount'] if torrent.trackerStats else 99999
+        return res
+
+    def active_torrents_info(self, keys):
+        return {torrent.hashString: self.keys_to_dict(keys, torrent) for torrent in self.call('get_torrents')
+                if torrent.rateUpload > 0}
+
+    def seeding_torrents_info(self, keys):
+        return {torrent.hashString: self.keys_to_dict(keys, torrent) for torrent in self.call('get_torrents')
+                if torrent.status == 'seeding'}
 
 
 class MagicInfo(UserDict):
@@ -481,13 +522,13 @@ class MagicSeed(Request):
                 uc = int(float(BeautifulSoup(res_json['price'], 'lxml').span['title'].replace(',', '')))
 
                 if uc > CONFIG['uc_max']:
-                    logger.warning(f'Torrent id: {tid} cost {uc}uc, too expensive | data {_data}')
+                    logger.warning(f'Torrent id: {tid} cost {uc}uc, too expensive | data: {data}')
                     self.magic_info[_id] = {'ts': int(time())}
                     return
 
                 if self.magic_info.cost() > CONFIG['total_uc_max']:
                     secs = min(self.magic_info.min_secs(), 1800)
-                    logger.warning(f'24h ucoin usage exceeded, Waiting for {secs}s ------ | data {_data}')
+                    logger.warning(f'24h ucoin usage exceeded, Waiting for {secs}s ------ | data: {data}')
                     await asyncio.sleep(secs)
                     return
                 self.magic_info[_id] = {'uc': uc}
@@ -500,8 +541,10 @@ class MagicSeed(Request):
                                 f"duration {data['hours']}h, uc usage {uc}, 24h total {self.magic_info.cost()}")
                     self.magic_info[_id] = {'ts': int(time())}
                 else:
-                    logger.error(f'Failed to send magic to torrent {_id}, id: {tid} | data: {_data}')
+                    logger.error(f'Failed to send magic to torrent {_id}, id: {tid} | data: {data}')
                     self.magic_info[_id] = {'uc': -uc}
+                if self.magic_info.cost() > CONFIG['total_uc_max']:
+                    self.magic_info.save()
 
         except Exception as e:
             logger.exception(e)
@@ -615,4 +658,7 @@ with Run() as r:
         elif c_type in ['qb', 'QB', 'qbittorrent', 'qBittorrent']:
             MagicSeed(Qbittorrent(**client_info))
             r.clients.append(Qbittorrent(**client_info))
+        elif c_type in ['tr', 'Transmission', 'transmission']:
+            MagicSeed(Transmission(**client_info))
+            r.clients.append(Transmission(**client_info))
     r.run()
