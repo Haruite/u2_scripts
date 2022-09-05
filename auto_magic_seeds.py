@@ -1,6 +1,6 @@
 """python3.7及以上
 脚本有两个功能，一个是给自己有上传速度的种子放魔法，一个是给孤种放地图炮吸引别人下载
-支持客户端 deluge, qbittorrent, transmission 和 rutorrent
+支持客户端 deluge, qbittorrent, transmission, rutorrent 和 utorrent
 依赖：pip3 install PyYAML requests bs4 lxml deluge-client qbittorrent-api transmission-rpc loguru pytz
 Azusa 大佬的 api，见 https://github.com/kysdm/u2_api，自动获取 token: https://greasyfork.org/zh-CN/scripts/428545
 因为使用了异步，放魔法速度很快，不会有反应时间，请使用前仔细检查配置
@@ -66,8 +66,16 @@ CONFIG = {  # 应该跟 json 差不多，放到 ide 里方便能看出错误
             'url': 'https://127.0.0.1/rutorrent',  # rtinst 安装完是这样的
             'username': '',  # web 用户名
             'password': '',  # web 密码
-            'verify': False  # 验证 https 证书
-        }
+            # 'verify': False  # 验证 https 证书
+        },
+        {
+            'type': 'utorrent',  # 'ut', 'UT', 'utorrent', 'uTorrent', 'µTorrent'
+            'host': 'http://127.0.0.1',  # host，最好带上 http 或者 https
+            'port': 8080,  # webui 端口
+            'username': '',  # web 用户名
+            'password': '',  # web 密码
+            # 'verify': True  # 验证 https 证书
+        },
     ],
     'requests_args': {
         'cookies': {
@@ -319,10 +327,10 @@ class Transmission(transmission_rpc.Client, BtClient):
 class Rutorrent(BtClient):
     tr_keys = {'tracker', 'total_seeds'}
 
-    def __init__(self, url, username, password, verify):
+    def __init__(self, url, username, password, **kwargs):
         self.url = url
         self.auth = (username, password)
-        self.verify = verify
+        self.verify = False if 'verify' not in kwargs else kwargs['verify']
 
     def call(self, method, *args, **kwargs):
         data = {'mode': method}
@@ -368,22 +376,100 @@ class Rutorrent(BtClient):
                 )
                 info[_id.lower()].update({key: update[key] for key in lst})
 
-    def active_torrents_info(self, keys):
+    def torrents_info(self, status, keys):
         res = {}
         for _id, data in self.call('list')['t'].items():
-            if int(data[11]) > 0:
-                res[_id.lower()] = self.info_from_list(keys, data)
+            if status == 'active' and int(data[11]) <= 0:
+                continue
+            if status == 'seeding' and int(data[19]) != 0:
+                continue
+            res[_id.lower()] = self.info_from_list(keys, data)
         if set(keys) & self.tr_keys:
             self.update_tracker_info(res, set(keys) & self.tr_keys)
         return res
 
+    def active_torrents_info(self, keys):
+        return self.torrents_info('active', keys)
+
     def seeding_torrents_info(self, keys):
+        return self.torrents_info('seeding', keys)
+
+
+class UTorrent(BtClient):
+    key_to_index = {'name': 2, 'total_size': 3, 'total_seeds': 15, 'upload_payload_rate': 8}
+
+    def __init__(self, host='127.0.0.1', port=8080, username='', password='', **kwargs):
+        if not any(host.startswith(pre) for pre in ('http://', 'https://')):
+            host = f'http://{host}'
+        self.url = f'{host}:{port}/gui'
+        self.verify = True if 'verif' not in kwargs else kwargs['verify']
+        self.auth = (username, password)
+        self.token, self.cookies = None, None
+        self.err_msg = f'Failed to get utorrent web-api token via {self.url}, Check your username and password'
+        self.get_token()
+
+    def get_token(self):
+        resp = requests.get(f'{self.url}/token.html', auth=self.auth, verify=self.verify)
+        if resp:
+            self.token = BeautifulSoup(resp.text, 'lxml').div.text
+            self.cookies = {'GUID': resp.cookies['GUID']}
+        else:
+            logger.error(self.err_msg)
+
+    def call(self, method, *args, **kwargs):
+        if method == 'list':
+            url = f'{self.url}/?list=1'
+        else:
+            url = f'{self.url}/?action={method}'
+        params = {'token': self.token}
+        params.update(kwargs)
+        for i in range(6):
+            resp = ''
+            try:
+                resp = requests.get(url, auth=self.auth, cookies=self.cookies, params=params, verify=self.verify).text
+                if not resp:
+                    logger.error(self.err_msg)
+                    return
+                else:
+                    return json.loads(resp)
+            except Exception as e:
+                if 'invalid request' in resp:
+                    self.get_token()
+                else:
+                    logger.error(e)
+                    sleep(0.3 * 2 ** i)
+
+    def get_state(self, num, rem):
+        """状态有很多种，这里敷衍一下和 rutorrent 一样"""
+        if num % 2 == 0:
+            return 'paused'
+        return 'seeding' if rem == 0 else 'downloading'
+
+    def get_tracker(self, info):
+        for torrent in self.call('getprops', hash=list(info.keys()))['props']:
+            info[torrent['hash'].lower()]['tracker'] = torrent['trackers'].split('\r\n')[0]
+
+    def active_torrents_info(self, keys):
+        return self.torrents_info('active', keys)
+
+    def seeding_torrents_info(self, keys):
+        return self.torrents_info('seeding', keys)
+
+    def torrents_info(self, status, keys):
         res = {}
-        for _id, data in self.call('list')['t'].items():
-            if int(data[19]) == 0:
-                res[_id.lower()] = self.info_from_list(keys, data)
-        if set(keys) & self.tr_keys:
-            self.update_tracker_info(res, set(keys) & self.tr_keys)
+        for torrent in self.call('list')['torrents']:
+            if status == 'active' and torrent[8] <= 0:
+                continue
+            if status == 'seeding' and self.get_state(torrent[1], torrent[18]) != 'seeding':
+                continue
+            res[torrent[0].lower()] = {}
+            for key in keys:
+                if key in self.key_to_index:
+                    res[torrent[0].lower()][key] = torrent[self.key_to_index[key]]
+            if 'state' in keys:
+                res[torrent[0].lower()]['state'] = self.get_state(torrent[1], torrent[18])
+        if 'tracker' in keys:
+            self.get_tracker(res)
         return res
 
 
@@ -777,7 +863,8 @@ class_to_name = {
     Deluge: ['de', 'Deluge', 'deluge'],
     Qbittorrent: ['qb', 'QB', 'qbittorrent', 'qBittorrent'],
     Transmission: ['tr', 'Transmission', 'transmission'],
-    Rutorrent: ['ru', 'Rutorrent', 'rutorrent']
+    Rutorrent: ['ru', 'Rutorrent', 'rutorrent'],
+    UTorrent: ['ut', 'UT', 'utorrent', 'uTorrent', 'µTorrent']
 }
 name_to_class = {name: cls for cls, lst in class_to_name.items() for name in lst}
 
