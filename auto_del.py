@@ -30,14 +30,15 @@ logger.add(level='DEBUG', sink=log_path, encoding='utf-8', rotation="5 MB")
 class Deluge(LocalDelugeRPCClient):
     timeout = 10
 
-    def __init__(self,
-                 host: str = '127.0.0.1',
-                 port: int = 58846,
-                 username: str = '',
-                 password: str = '',
-                 decode_utf8: bool = True,
-                 automatic_reconnect: bool = True,
-                 ):
+    def __init__(
+            self,
+            host: str = '127.0.0.1',
+            port: int = 58846,
+            username: str = '',
+            password: str = '',
+            decode_utf8: bool = True,
+            automatic_reconnect: bool = True
+    ):
         super().__init__(host, port, username, password, decode_utf8, automatic_reconnect)
 
     def call(self, method, *args, **kwargs):
@@ -63,10 +64,11 @@ class AutoDel:
         self.sur = deque(maxlen=100)
         self.free_space = MIN_FREE_SPACE * 1024 ** 3
         self.torrent_status = {}
-        self.torrent_keys = ['active_time', 'download_payload_rate', 'name', 'state',
-                             'seeding_time', 'total_peers', 'total_seeds', 'total_size',
-                             'total_done', 'total_uploaded', 'upload_payload_rate', 'label'
-                             ]
+        self.torrent_keys = [
+            'active_time', 'download_payload_rate', 'name', 'state',
+            'seeding_time', 'total_peers', 'total_seeds', 'total_size',
+            'total_done', 'total_uploaded', 'upload_payload_rate', 'label'
+        ]
 
     def update_session(self):
         self.free_space = self.client.core.get_free_space()
@@ -96,8 +98,10 @@ class AutoDel:
                     except:
                         pass
                 if self.free_space >= MIN_FREE_SPACE * 1024 ** 3:
-                    logger.debug(f'There is free space {self.free_space / 1024 ** 3:.3f} GiB. '
-                                 f'No need to del any torrents.')
+                    logger.debug(
+                        f'There is free space {self.free_space / 1024 ** 3:.3f} GiB. '
+                        f'No need to del any torrents.'
+                    )
                 else:
                     indicator, info = self.weight()
                     while self.free_space < MIN_FREE_SPACE * 1024 ** 3:
@@ -114,16 +118,22 @@ class AutoDel:
                         except Exception as e:
                             if e.__class__.__name__ == 'InvalidTorrentError':
                                 # 正常操作，基本上也是删了
-                                logger.error(f"{e.__module__}.{e.__class__.__name__}: "
-                                             f"Torrent_id {info[i]['_id']} not in session")
+                                logger.error(
+                                    f"{e.__module__}.{e.__class__.__name__}: "
+                                    f"Torrent_id {info[i]['_id']} not in session"
+                                )
                             else:
                                 logger.exception(e)
                         self.free_space += info[i]['done']
-                        logger.warning(f"{state} {info[i]['state'].lower()} torrent {info[i]['_id']}, "
-                                       f"name | {info[i]['name']}. ")
+                        logger.warning(
+                            f"{state} {info[i]['state'].lower()} torrent {info[i]['_id']}, "
+                            f"name | {info[i]['name']}. "
+                        )
                         if state == 'Successfully deleted':
-                            logger.info(f"{info[i]['done'] / 1024 ** 3:.3f} GiB space released. "
-                                        f"Free space {self.free_space / 1024 ** 3:.3f} GiB.")
+                            logger.info(
+                                f"{info[i]['done'] / 1024 ** 3:.3f} GiB space released. "
+                                f"Free space {self.free_space / 1024 ** 3:.3f} GiB."
+                            )
                         sleep(info[i]['done'] / 1024 ** 3 / 10)
                         del indicator[i]
                         del info[i]
