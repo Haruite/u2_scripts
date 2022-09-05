@@ -38,57 +38,66 @@ from transmission_rpc.error import TransmissionTimeoutError, TransmissionConnect
 
 
 CONFIG = {  # 应该跟 json 差不多，放到 ide 里方便能看出错误
-    'clients_info': [{'type': 'deluge',  # 'de', 'Deluge', 'deluge'
-                      'host': '127.0.0.1',  # IP
-                      'port': 58846,  # daemon 端口
-                      'username': '',  # 本地客户端可以不填用户名和密码
-                      'password': ''  # cat ~/.config/deluge/auth
-                      },  # 多个用逗号隔开
-                     {'type': 'qbittorrent',  # 'qb', 'QB', 'qbittorrent', 'qBittorrent'
-                      'host': 'http://127.0.0.1',  # host，最好带上 http 或者 https
-                      'port': 8080,  # webui 端口
-                      'username': '',  # web 用户名
-                      'password': '',  # web 密码
-                      # 'verify': True  # 验证 https 证书
-                      },
-                     {'type': 'transmission',  # 'tr', 'Transmission', 'transmission'
-                      'host': '127.0.0.1',  # IP
-                      'port': 9091,  # webui 端口
-                      'username': '',  # web 用户名
-                      'password': ''  # web 密码
-                      },
-                     {'type': 'rutorrent',  # 'ru', 'Rutorrent', 'rutorrent'
-                      'url': 'https://127.0.0.1/rutorrent',  # rtinst 安装完是这样的
-                      'username': '',  # web 用户名
-                      'password': '',  # web 密码
-                      'verify': False  # 验证 https 证书
-                      }
-                     ],
-    'requests_args': {'cookies': {'nexusphp_u2': ''  # 网站 cookie
-                                  },
-                      'headers': {'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                                                'AppleWebKit/537.36 (KHTML, like Gecko) '
-                                                'Chrome/104.0.5112.102 Safari/537.36 Edg/104.0.1293.70'},
-                      'proxy': '',  # 'http://127.0.0.1:10809'
-                      'timeout': 10
-                      },
+    'clients_info': [
+        {
+            'type': 'deluge',  # 'de', 'Deluge', 'deluge'
+            'host': '127.0.0.1',  # IP
+            'port': 58846,  # daemon 端口
+            'username': '',  # 本地客户端可以不填用户名和密码
+            'password': ''  # cat ~/.config/deluge/auth
+        },  # 多个用逗号隔开
+        {
+            'type': 'qbittorrent',  # 'qb', 'QB', 'qbittorrent', 'qBittorrent'
+            'host': 'http://127.0.0.1',  # host，最好带上 http 或者 https
+            'port': 8080,  # webui 端口
+            'username': '',  # web 用户名
+            'password': '',  # web 密码
+            # 'verify': True  # 验证 https 证书
+        },
+        {
+            'type': 'transmission',  # 'tr', 'Transmission', 'transmission'
+            'host': '127.0.0.1',  # IP
+            'port': 9091,  # webui 端口
+            'username': '',  # web 用户名
+            'password': ''  # web 密码
+        },
+        {
+            'type': 'rutorrent',  # 'ru', 'Rutorrent', 'rutorrent'
+            'url': 'https://127.0.0.1/rutorrent',  # rtinst 安装完是这样的
+            'username': '',  # web 用户名
+            'password': '',  # web 密码
+            'verify': False  # 验证 https 证书
+        }
+    ],
+    'requests_args': {
+        'cookies': {
+            'nexusphp_u2': '',  # 网站 cookie
+            },
+        'headers': {
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                          'AppleWebKit/537.36 (KHTML, like Gecko) '
+                          'Chrome/104.0.5112.102 Safari/537.36 Edg/104.0.1293.70'
+        },
+        'proxy': '',  # 'http://127.0.0.1:10809'
+        'timeout': 10
+    },
     'magic_for_self': {  # 做种中的种子，上传速度大于一定值，给自己放 2.33x 魔法
-                       'enable': True,  # 是否开启
-                       'interval': 60,  # 检查的间隔
-                       'magic_downloading': True,  # 是否下载中的种子放 2.33x 魔法
-                       'min_rate': 1024,  # 最小上传速度(KiB/s)
-                       'min_size': 5,  # 最小体积(GiB)
-                       'min_d': 180,  # 种子最小生存天数
-                       },
+        'enable': True,  # 是否开启
+        'interval': 60,  # 检查的间隔
+        'magic_downloading': True,  # 是否下载中的种子放 2.33x 魔法
+        'min_rate': 1024,  # 最小上传速度(KiB/s)
+        'min_size': 5,  # 最小体积(GiB)
+        'min_d': 180,  # 种子最小生存天数
+    },
     'magic_for_all': {  # 做种中的种子，做种人数小于一定值，放地图炮 free，吸引别人下载
-                      'enable': False,  # 是否开启
-                      'interval': 86400,  # 检查的间隔
-                      'torrent_num': 5,  # 一次放魔法的种子个数
-                      'max_seeder_num': 5,  # 做种人数最大值
-                      '233_all': True,  # 为真时给所有人放 2.33x↑0x↓，否则给所有人 0x↓，自己放 2.33x↑
-                      'hours': 24,  # 魔法持续时间
-                      'min_rm_hr': 0  # 2.33x 剩余时间小于这个值(小时)还是会放 2.33x 魔法
-                      },
+        'enable': False,  # 是否开启
+        'interval': 86400,  # 检查的间隔
+        'torrent_num': 5,  # 一次放魔法的种子个数
+        'max_seeder_num': 5,  # 做种人数最大值
+        '233_all': True,  # 为真时给所有人放 2.33x↑0x↓，否则给所有人 0x↓，自己放 2.33x↑
+        'hours': 24,  # 魔法持续时间
+        'min_rm_hr': 0  # 2.33x 剩余时间小于这个值(小时)还是会放 2.33x 魔法
+    },
     'uc_max': 30000,  # 单个魔法最大 uc 使用量
     'total_uc_max': 200000,  # 24h 内 uc 最大使用量
     'api_token': '',  # api 的 token，填了将默认使用 api 查询种子信息，不填就直接从 u2 网页获取信息
@@ -118,9 +127,10 @@ class CheckKeys:
 
             unsupported_keys = [key for key in keys if key not in args[0].all_keys]
             if unsupported_keys:
-                raise ValueError(f'{unsupported_keys} not supported. '
-                                 f'These are the all available keys: \n{args[0].all_keys}'
-                                 )
+                raise ValueError(
+                    f'{unsupported_keys} not supported. '
+                    f'These are the all available keys: \n{args[0].all_keys}'
+                )
             res = func(*args, **kwargs)
             if not isinstance(res, dict) and res is not None:
                 raise TypeError(f'Return value of function {func.__name__} should be dict type')
@@ -147,14 +157,15 @@ check_keys = CheckKeys()
 
 class BtClient(metaclass=ABCMeta):
     """BT 客户端基类"""
-    all_keys = ('name',  # str 类型，文件名 (外层文件夹名)
-                'peers',  # 可迭代对象，每项为一个字典，字典为单个 peer 的信息，其中必须包含 progress 项，代表进度，类型为 float(0~1)
-                'total_size',  # int 类型，种子体积 (B)
-                'state',  # str 类型，种子当前状态
-                'total_seeds',   # int 类型，种子当前做种数
-                'tracker',  # str 类型，种子当前 tracker
-                'upload_payload_rate',  # int 类型，上传速度 (B / s)
-                )
+    all_keys = (
+        'name',  # str 类型，文件名 (外层文件夹名)
+        'peers',  # 可迭代对象，每项为一个字典，字典为单个 peer 的信息，其中必须包含 progress 项，代表进度，类型为 float(0~1)
+        'total_size',  # int 类型，种子体积 (B)
+        'state',  # str 类型，种子当前状态
+        'total_seeds',   # int 类型，种子当前做种数
+        'tracker',  # str 类型，种子当前 tracker
+        'upload_payload_rate',  # int 类型，上传速度 (B / s)
+    )
 
     wrapped_classes = []
 
@@ -225,13 +236,17 @@ class Deluge(LocalDelugeRPCClient, BtClient):
 
 
 class Qbittorrent(qbittorrentapi.Client, BtClient):
-    de_key_to_qb = {'name': 'name', 'tracker': 'tracker', 'total_size': 'size',
-                    'upload_payload_rate': 'upspeed', 'state': 'state', 'total_seeds': 'num_complete'}
+    de_key_to_qb = {
+        'name': 'name', 'tracker': 'tracker', 'total_size': 'size',
+        'upload_payload_rate': 'upspeed', 'state': 'state', 'total_seeds': 'num_complete'
+    }
 
     def __init__(self, host='http://127.0.0.1', port=8080, username='', password='', **kwargs):
-        super().__init__(host=host, port=port, username=username, password=password,
-                         REQUESTS_ARGS={'timeout': 10}, FORCE_SCHEME_FROM_HOST=True,
-                         VERIFY_WEBUI_CERTIFICATE=True if 'verify' not in kwargs else kwargs['verify'])
+        super().__init__(
+            host=host, port=port, username=username, password=password,
+            REQUESTS_ARGS={'timeout': 10}, FORCE_SCHEME_FROM_HOST=True,
+            VERIFY_WEBUI_CERTIFICATE=True if 'verify' not in kwargs else kwargs['verify']
+        )
 
     def call(self, method, *args, **kwargs):
         try:
@@ -239,8 +254,10 @@ class Qbittorrent(qbittorrentapi.Client, BtClient):
         except HTTPError as e:
             logger.error(f'Failed to connect to qbittorrent on {self.host}:{self.port} due to http error: {e}')
         except APIConnectionError as e:
-            logger.error(f'Failed to connect to qbittorrent on {self.host}:{self.port} due to '
-                         f'qbittorrentapi.exceptions.APIConnectionError:  {e}')
+            logger.error(
+                f'Failed to connect to qbittorrent on {self.host}:{self.port} due to '
+                f'qbittorrentapi.exceptions.APIConnectionError:  {e}'
+            )
 
     def fix_return_value(self, lst, keys):
         torrents_info = {}
@@ -259,8 +276,10 @@ class Qbittorrent(qbittorrentapi.Client, BtClient):
 
 
 class Transmission(transmission_rpc.Client, BtClient):
-    de_key_to_tr = {'name': 'name', 'total_size': 'total_size',
-                    'upload_payload_rate': 'rateUpload', 'state': 'status'}
+    de_key_to_tr = {
+        'name': 'name', 'total_size': 'total_size',
+        'upload_payload_rate': 'rateUpload', 'state': 'status'
+    }
 
     def __init__(self, host='http://127.0.0.1', port=9091, username='', password=''):
         super().__init__(host=host, port=port, username=username, password=password, timeout=10)
@@ -283,12 +302,18 @@ class Transmission(transmission_rpc.Client, BtClient):
         return res
 
     def active_torrents_info(self, keys):
-        return {torrent.hashString: self.keys_to_dict(keys, torrent) for torrent in self.call('get_torrents')
-                if torrent.rateUpload > 0}
+        return {
+            torrent.hashString: self.keys_to_dict(keys, torrent)
+            for torrent in self.call('get_torrents')
+            if torrent.rateUpload > 0
+        }
 
     def seeding_torrents_info(self, keys):
-        return {torrent.hashString: self.keys_to_dict(keys, torrent) for torrent in self.call('get_torrents')
-                if torrent.status == 'seeding'}
+        return {
+            torrent.hashString: self.keys_to_dict(keys, torrent)
+            for torrent in self.call('get_torrents')
+            if torrent.status == 'seeding'
+        }
 
 
 class Rutorrent(BtClient):
@@ -305,13 +330,17 @@ class Rutorrent(BtClient):
         res = ''
         for i in range(6):
             try:
-                res = requests.post(f"{self.url.rstrip('/')}/plugins/httprpc/action.php",
-                                    auth=self.auth, data=data, verify=self.verify).text
+                res = requests.post(
+                    f"{self.url.rstrip('/')}/plugins/httprpc/action.php",
+                    auth=self.auth, data=data, verify=self.verify
+                ).text
                 return json.loads(res)
             except json.JSONDecodeError as e:
                 if 'Authorization Required' in res:
-                    logger.error(f'Failed to connect to rutorrent instance via {self.url}, '
-                                 f'check your username and password.')
+                    logger.error(
+                        f'Failed to connect to rutorrent instance via {self.url}, '
+                        f'check your username and password.'
+                    )
                     return
                 else:
                     logger.error(e)
@@ -333,8 +362,10 @@ class Rutorrent(BtClient):
     def update_tracker_info(self, info, lst):
         for _id, data in self.call('trkall').items():
             if _id.lower() in info:
-                update = {'tracker': None, 'total_seeds': 99999} if not data else {
-                    'tracker': data[0][0], 'total_seeds': int(data[0][4])}
+                update = (
+                    {'tracker': None, 'total_seeds': 99999} if not data
+                    else {'tracker': data[0][0], 'total_seeds': int(data[0][4])}
+                )
                 info[_id.lower()].update({key: update[key] for key in lst})
 
     def active_torrents_info(self, keys):
@@ -404,12 +435,14 @@ class Request:
     def __init__(self):
         self.session = None
         self.u2_args = CONFIG['requests_args']
-        self.api_args = {'timeout': CONFIG['requests_args'].get('timeout'),
-                         'proxy': CONFIG['requests_args'].get('proxy')
-                         }
+        self.api_args = {
+            'timeout': CONFIG['requests_args'].get('timeout'),
+            'proxy': CONFIG['requests_args'].get('proxy')
+        }
 
-    async def request(self, url, method='get', retries=5, **kwargs) -> \
-            Union[str, Dict[str, Union[str, Dict[str, List[Dict[str, Union[str, int, None]]]]]]]:
+    async def request(self, url, method='get', retries=5, **kwargs) -> (
+            Union[str, Dict[str, Union[str, Dict[str, List[Dict[str, Union[str, int, None]]]]]]]
+    ):
         if url.startswith('https://u2.dmhy.org'):
             [kwargs.setdefault(key, val) for key, val in self.u2_args.items()]
         else:
@@ -458,10 +491,13 @@ class MagicSeed(Request):
         tasks = []
 
         for _id, data in self.client.active_torrents_info(
-                ['name', 'tracker', 'total_size', 'upload_payload_rate', 'state']).items():
+                ['name', 'tracker', 'total_size', 'upload_payload_rate', 'state']
+        ).items():
 
-            if _id not in self.magic_info or 'ts' in self.magic_info[_id]\
-                    and int(time()) - self.magic_info[_id]['ts'] >= 86400:  # 魔法还在有效期内则不加入
+            if (
+                    _id not in self.magic_info
+                    or 'ts' in self.magic_info[_id] and int(time()) - self.magic_info[_id]['ts'] >= 86400
+            ):  # 魔法还在有效期内则不加入
                 if data['tracker'] and ('daydream.dmhy.best' in data['tracker']
                                         or 'tracker.dmhy.org' in data['tracker']):  # 过滤不是 U2 的种子
                     magic_downloading = CONFIG['magic_for_self']['magic_downloading']
@@ -473,8 +509,10 @@ class MagicSeed(Request):
         res = await asyncio.gather(*tasks)
         self.magic_info.del_unused()
 
-        magic_tasks = [self.send_magic(__id, _tid, {'user': 'SELF', 'hours': 24, 'ur': 2.33, 'dr': 1})
-                       for __id, _tid, ur_233 in res if _tid and __id not in self.magic_info]
+        magic_tasks = [
+            self.send_magic(__id, _tid, {'user': 'SELF', 'hours': 24, 'ur': 2.33, 'dr': 1})
+            for __id, _tid, ur_233 in res if _tid and __id not in self.magic_info
+        ]
         await asyncio.gather(*magic_tasks)
         self.magic_info.save()
 
@@ -497,7 +535,7 @@ class MagicSeed(Request):
         '''获取时区'''
         tz_info = soup.find('a', {'href': 'usercp.php?action=tracker#timezone'})['title']
         pre_suf = [['时区', '，点击修改。'], ['時區', '，點擊修改。'], ['Current timezone is ', ', click to change.']]
-        tz = [tz_info[len(pre):][:-len(suf)].strip() for pre, suf in pre_suf if tz_info.startswith(pre)][0]
+        tz = [tz_info[len(pre):-len(suf)].strip() for pre, suf in pre_suf if tz_info.startswith(pre)][0]
         timezone = pytz.timezone(tz)
 
         table = soup.select('table.torrents')
@@ -532,19 +570,25 @@ class MagicSeed(Request):
     async def info_from_api(self, _id, name):
         _param = {'uid': CONFIG['uid'], 'token': CONFIG['api_token']}
 
-        history_data = await self.request('https://u2.kysdm.com/api/v1/history',
-                                          params={**_param, 'hash': _id})
+        history_data = await self.request(
+            'https://u2.kysdm.com/api/v1/history',
+            params={**_param, 'hash': _id}
+        )
         tid = None
         if history_data['data']['history']:
             tid = history_data['data']['history'][0]['torrent_id']
 
-            res = await self.request('https://u2.kysdm.com/api/v1/promotion_super',
-                                     params={**_param, 'torrent_id': tid})
+            res = await self.request(
+                'https://u2.kysdm.com/api/v1/promotion_super',
+                params={**_param, 'torrent_id': tid}
+            )
             if float(res['data']['promotion_super'][0]['private_ratio'].split(' / ')[0]) >= 2.33:
                 logger.info(f'Torrent {_id}, id: {tid}: 2.33x upload magic existed!')
 
-                res = await self.request('https://u2.kysdm.com/api/v1/promotion_specific',
-                                         params={**_param, 'torrent_id': tid})
+                res = await self.request(
+                    'https://u2.kysdm.com/api/v1/promotion_specific',
+                    params={**_param, 'torrent_id': tid}
+                )
                 pro_list = res['data']['promotion']
 
                 pro_end_time = time()
@@ -611,9 +655,11 @@ class MagicSeed(Request):
                 url = f'https://u2.dmhy.org/promotion.php?action=magic&torrent={tid}'
                 p2 = await self.request(url, method='post', retries=0, data=data)
                 if re.match(r'^<script.+<\/script>$', p2):
-                    logger.info(f"Sent a {data['ur']}x upload and {data['dr']}x download "
-                                f"magic to torrent {_id}, tid: {tid}, user {data['user'].lower()}, "
-                                f"duration {data['hours']}h, uc usage {uc}, 24h total {self.magic_info.cost()}")
+                    logger.info(
+                        f"Sent a {data['ur']}x upload and {data['dr']}x download "
+                        f"magic to torrent {_id}, tid: {tid}, user {data['user'].lower()}, "
+                        f"duration {data['hours']}h, uc usage {uc}, 24h total {self.magic_info.cost()}"
+                    )
                     self.magic_info[_id] = {'ts': int(time())}
                 else:
                     logger.error(f'Failed to send magic to torrent {_id}, id: {tid} | data: {data}')
@@ -656,8 +702,10 @@ class Run(MagicSeed):
 
         _id_list = []
         for _id, data in info.items():
-            if data['tracker'] and ('daydream.dmhy.best' in data['tracker']
-                                    or 'tracker.dmhy.org' in data['tracker']):
+            if data['tracker'] and (
+                    'daydream.dmhy.best' in data['tracker']
+                    or 'tracker.dmhy.org' in data['tracker']
+            ):
                 if data['total_seeds'] <= CONFIG['magic_for_all']['max_seeder_num']:
                     _id_list.append(_id)
 
@@ -676,8 +724,10 @@ class Run(MagicSeed):
         hr = CONFIG['magic_for_all']['hours']
         for __id, _tid, ur_233 in res:
             if _tid:
-                if ur_233 and not ('ts' in self.magic_info[__id] and self.magic_info[__id]['ts']
-                                   + 86400 - time() < CONFIG['magic_for_all']['min_rm_hr'] * 3600):
+                if ur_233 and not (
+                        'ts' in self.magic_info[__id]
+                        and self.magic_info[__id]['ts'] + 86400 - time() < CONFIG['magic_for_all']['min_rm_hr'] * 3600
+                ):
                     magic_tasks.append(self.send_magic(__id, _tid, {'user': 'ALL', 'hours': hr, 'ur': 1, 'dr': 0}))
                 elif CONFIG['magic_for_all']['233_all']:
                     magic_tasks.append(self.send_magic(__id, _tid, {'user': 'ALL', 'hours': hr, 'ur': 2.33, 'dr': 0}))
@@ -723,10 +773,12 @@ logger.add(level='DEBUG', sink=CONFIG['log_path'], rotation="5 MB")
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-class_to_name = {Deluge: ['de', 'Deluge', 'deluge'],
-                 Qbittorrent: ['qb', 'QB', 'qbittorrent', 'qBittorrent'],
-                 Transmission: ['tr', 'Transmission', 'transmission'],
-                 Rutorrent: ['ru', 'Rutorrent', 'rutorrent']}
+class_to_name = {
+    Deluge: ['de', 'Deluge', 'deluge'],
+    Qbittorrent: ['qb', 'QB', 'qbittorrent', 'qBittorrent'],
+    Transmission: ['tr', 'Transmission', 'transmission'],
+    Rutorrent: ['ru', 'Rutorrent', 'rutorrent']
+}
 name_to_class = {name: cls for cls, lst in class_to_name.items() for name in lst}
 
 
