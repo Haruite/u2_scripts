@@ -57,7 +57,6 @@ class CatchMagic:
     pre_suf = [['时区', '，点击修改。'], ['時區', '，點擊修改。'], ['Current timezone is ', ', click to change.']]
 
     def __init__(self):
-        logger.add(level='DEBUG', sink=LOG_PATH, rotation='2 MB')
         self.checked, self.magic_id_0 = deque([], maxlen=200), None
         with open(DATA_PATH, 'a', encoding='utf-8'):
             pass
@@ -88,8 +87,10 @@ class CatchMagic:
                     all_checked = True
                     break
                 if tr.contents[1].string in ['魔法', 'Magic', 'БР']:
-                    if not tr.contents[3].a and tr.contents[3].string in ['所有人', 'Everyone', 'Для всех'] or \
-                            MAGIC_SELF and tr.contents[3].a and tr.contents[3].a['href'][19:] == user_id:
+                    if (
+                            not tr.contents[3].a and tr.contents[3].string in ['所有人', 'Everyone', 'Для всех']
+                            or MAGIC_SELF and tr.contents[3].a and tr.contents[3].a['href'][19:] == user_id
+                    ):
                         if tr.contents[5].string not in ['Terminated', '终止', '終止', 'Прекращён']:
                             if tr.contents[2].a:
                                 tid = int(tr.contents[2].a['href'][15:])
@@ -159,8 +160,10 @@ class CatchMagic:
             for table in tables or []:
                 for tr in filter(lambda _tr: 'nowrap' in str(_tr), table):
                     if tr.get('bgcolor'):
-                        logger.info(f"Torrent {tid} | you are already "
-                                    f"{'downloading' if len(tr.contents) == 12 else 'seeding'} the torrent")
+                        logger.info(
+                            f"Torrent {tid} | you are already "
+                            f"{'downloading' if len(tr.contents) == 12 else 'seeding'} the torrent"
+                        )
                         return
 
         if f'[U2].{tid}.torrent' in os.listdir(BK_DIR):
@@ -238,8 +241,10 @@ class CatchMagic:
                         to_info['last_dl_time'] = time() - self.timedelta(date, self.get_tz(soup))
             if MIN_RE_DL_DAYS > 0 and to_info['last_dl_time']:
                 if time() - to_info['last_dl_time'] < 86400 * MIN_RE_DL_DAYS:
-                    logger.debug(f"Torrent {tid} | You have downloaded this torrent "
-                                 f"{(time() - to_info['last_dl_time']) // 86400} days before, passed")
+                    logger.debug(
+                        f"Torrent {tid} | You have downloaded this torrent "
+                        f"{(time() - to_info['last_dl_time']) // 86400} days before, passed"
+                    )
                     return
 
         delta = self.timedelta(soup.time.get('title') or soup.time.text, self.get_tz(soup))
@@ -260,8 +265,10 @@ class CatchMagic:
             return
 
         if not DOWNLOAD_NON_FREE:
-            if [self.get_pro(tr.contents[1])[1] for tr in soup.find('table', {'width': '90%'})
-                    if tr.td.text in ['流量优惠', '流量優惠', 'Promotion', 'Тип раздачи (Бонусы)']][0] > 0:
+            if [
+                self.get_pro(tr.contents[1])[1] for tr in soup.find('table', {'width': '90%'})
+                if tr.td.text in ['流量优惠', '流量優惠', 'Promotion', 'Тип раздачи (Бонусы)']
+            ][0] > 0:
                 logger.debug(f'torrent {tid} | is not free, will pass if no free magic in delay.')
                 magic_page_soup = self.get_soup(f'https://u2.dmhy.org/promotion.php?action=detail&id={magic_id}')
                 tbody = magic_page_soup.find('table', {'width': '75%', 'cellpadding': 4}).tbody
@@ -295,8 +302,10 @@ class CatchMagic:
     def run(self):
         id_0 = self.magic_id_0
         with ThreadPoolExecutor(max_workers=6) as executor:
-            futures = {executor.submit(self.analyze_magic, magic_id, tid): magic_id
-                       for magic_id, tid in self.all_effective_magic()}
+            futures = {
+                executor.submit(self.analyze_magic, magic_id, tid): magic_id
+                for magic_id, tid in self.all_effective_magic()
+            }
             if futures:
                 error = False
                 for future in as_completed(futures):
@@ -327,6 +336,8 @@ def main(catch):
                 gc.collect()
                 sleep(INTERVAL)
 
+
+logger.add(level='DEBUG', sink=LOG_PATH, rotation='2 MB')
 
 c = CatchMagic()
 if RUN_CRONTAB:
