@@ -66,15 +66,9 @@ proxies:
 
 headers:  
 # http 请求头
-
-    authority: u2.dmhy.org
-    accept-encoding: gzip, deflate
-    accept-language: zh-CN,zh;q=0.8
-
     cookie: nexusphp_u2=  
     # cookie 必填，注意等号两边不能有空格
 
-    referer: https://u2.dmhy.org/index.php,
     user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4814.0 Safari/537.36 Edg/99.0.1135.6
 
 magic:
@@ -1010,7 +1004,9 @@ class MagicAndLimit:
         if 'total_size' in self.to:
             s = int(self.to['total_size'] / 1024 ** 3) + 1
         else:
-            s = int(float(self.to['size'].split(' ')[0].replace(',', '.'))) + 1
+            [num, unit] = self.to['size'].split(' ')[0]
+            s = 1 if unit in ['MiB', '喵', 'MiБ'] else (
+                    int(float(num) * 1024 if unit in ['TiB', '烫', 'TiБ'] else float(num)) + 1)
         ttl = self.deta / 2592000
         ttl = 1 if ttl < 1 else ttl
         ur, dr = float(rule['ur']), float(rule['dr'])
