@@ -398,13 +398,16 @@ class Deluge(LocalDelugeRPCClient, BtClient):  # 主要是把 call 重写了一�
             else:
                 return self.call_retry(method, *args, **kwargs)
         except BaseException as e:
-            if self.enable_tc:
-                self.io_busy = True
             if isinstance(e, FailedToReconnectException):
                 logger.error(f'Failed to reconnect to deluge client! Host  -------  {self.host}')
+            elif isinstance(e, TimeoutError):
+                logger.error(f'{e.__class__.__name__}: {e}')
+            elif e.__class__.__name__ == 'BadLoginError':
+                logger.error(f'Failed to connect to deluge client on {self.host}, Password does not match')
+            elif not self.enable_tc:
+                raise
             if self.enable_tc:
-                if isinstance(e, TimeoutError):
-                    logger.error(f'{e.__class__.__name__}: {e}')
+                self.io_busy = True
                 if isinstance(e, FunctionTimedOut):
                     logger.error(f'{e.__module__}.{e.__class__.__name__}: {e.msg}')
                 return self.call_on_fail(method, *args, **kwargs)
@@ -538,7 +541,7 @@ class MagicAndLimit:
                             logger.debug(f'Downloaded page: {url}')
                         else:
                             logger.trace(f'Downloaded page: {url}')
-                        if '<title>Access Point :: U2</title>' in html.text:
+                        if '<title>Access Point :: U2</title>' in html.text or 'Access Denied' in html.text:
                             logger.error('Your cookie is wrong')
                     return html
                 elif i == retries - 1:
