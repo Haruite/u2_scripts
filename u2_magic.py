@@ -1407,8 +1407,7 @@ class MagicAndLimit:
         通常并不能上传很多，所以可以正常上传的时间就按照完成时间计算'''
 
         if self.to['max_upload_speed'] == -1:
-            res = self.min_time / self.m_conf['min_connect_times_before_announce'] * 2 \
-                  * self.to['upload_payload_rate']
+            res = 10 * self.to['upload_payload_rate']
             if self.this_up + res + 6291456 * eta > self.announce_interval * 52428800:
                 '''上次汇报到现在的上传量即将超过一个汇报周期内允许的不超速的最大值，开始上传限速.
                 限速值不要太低，太低会跟不上进度影响之后的上传'''
