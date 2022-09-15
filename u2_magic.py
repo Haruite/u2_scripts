@@ -1434,7 +1434,7 @@ class MagicAndLimit:
                 elif max_upload_speed < 0:  # 上传量超过了一个汇报间隔内不超速的最大值
                     if self.this_up / self.this_time < 209715200:
                         if self.this_time >= 900:
-                            self.client.reannounce(self.to['_id'])
+                            self.re_an()
                             logger.error(f'Failed to limit upload speed limit of torrent {self.to["tid"]} '
                                          f'because the upload exceeded')
                     else:
@@ -1555,16 +1555,18 @@ class MagicAndLimit:
                         logger.info(f"Set 5120K upload limit for torrent {self.to['tid']}, waiting for re-announce")
 
     def re_an(self):
-        self.to['about_to_reannounce'] = True
-        _to = self.to
-        if self.m_conf['enable']:
-            self.magic()
-        self.to = _to
-        sleep(1)
-        self.client.reannounce(self.to['_id'])
-        if 'last_announce_time' in self.to:
-            self.to['last_announce_time'] = time()
-        self.to['about_to_reannounce'] = False
+        if not ('lft' in self.to and time() - self.to['lft'] < 900):
+            self.to['about_to_reannounce'] = True
+            _to = self.to
+            if self.m_conf['enable']:
+                self.magic()
+            self.to = _to
+            sleep(1)
+            self.client.reannounce(self.to['_id'])
+            self.to['lft'] = time()
+            if 'last_announce_time' in self.to:
+                self.to['last_announce_time'] = time()
+            self.to['about_to_reannounce'] = False
 
     def update_tid(self):
         """根据 hash 搜索种子 id"""
