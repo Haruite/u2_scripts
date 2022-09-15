@@ -1419,9 +1419,10 @@ class MagicAndLimit:
             if self.to['max_upload_speed'] == 5120:
                 # 在 optimize_announce_time 用到了这个，也可以手动限速到 5120k 等待汇报
                 if self.this_up / self.this_time < 52428800 and self.this_time >= 900:
-                    self.re_an()
-                    self.client.set_upload_limit(self.to['_id'], -1)
-                    logger.info('Average upload speed below 50MiB/s, remove 5120K up-limit')
+                    if not ('lft' in self.to and time() - self.to['lft'] < 900):
+                        self.re_an()
+                        self.client.set_upload_limit(self.to['_id'], -1)
+                        logger.info('Average upload speed below 50MiB/s, remove 5120K up-limit')
             elif self.this_time < 120:  # 已经汇报完，解除上传限速
                 self.client.set_upload_limit(self.to['_id'], -1)
                 logger.info(f'Removed upload speed limit of torrent {self.to["tid"]}.')
