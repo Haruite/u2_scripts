@@ -1,4 +1,6 @@
-"""发糖脚本，一堆没用的逻辑，没有实际测试过"""
+"""发糖脚本，用于在论坛或者种子评论区发糖，没有实际测试过
+解析回复内容会自动去掉引用、代码、链接，但不会去掉折叠内容
+不想吐槽这个代码，明明就是这么简单的功能因为抠逻辑写得难读得屎一样"""
 
 import json
 import os
@@ -27,6 +29,7 @@ RE = 1  # 同一个用户最大转账次数(一条评论算一次)，-1 为不�
 EXT = True  # 为真时 uc 不足直接退出脚本，否则等到 uc 恢复继续发糖
 MSG = ''  # 留言
 INFO = False  # 是否在留言中注明帖子和评论 id 等信息
+UPDATE = False  # 为真时每次给一个人发糖前都会检查帖子内容，否则等所有人发完了再检查帖子内容
 DATA_PATH = f'{os.path.splitext(__file__)[0]}.info'
 LOG_PATH = f'{os.path.splitext(__file__)[0]}.log'
 
@@ -92,12 +95,16 @@ class TransferUCoin:
             self.parse_page()
             _list = list(self.info.keys())
             index = (-1 if not self.id_info else _list.index(self.id_info)) + 1
+            i = 0
 
             if len(_list) > index:
                 for id_info in _list[index:]:
                     info = self.info[id_info]
                     if info['post_uid'] not in [self.uid, None]:
                         if info['transferred'] < UC:
+                            if i > 0 and UPDATE:
+                                self.parse_page()
+                                i += 1
                             self.batch_transfer(id_info, info)
                         if info['transferred'] >= UC:
                             self.transfer_num += 1
@@ -217,7 +224,7 @@ class TransferUCoin:
                     if all_id:
                         logger.info(f'{id_info} | 解析到用户 ID {uid}，将会给用户 {uid} 发糖')
                     else:
-                        logger.info(f'{id_info} | 没有解析到有效的用户 ID，将会给层主 {uid} 发糖')
+                        logger.info(f'{id_info} | 没有解析到用户 ID，将会给层主 {uid} 发糖')
                 else:
                     self.info[id_info]['transfer_uid'] = -uid
                     logger.info(f"{id_info} | {uid} 不是有效的用户 ID，将会给层主 {self.info[id_info]['post_uid']} 发糖")
