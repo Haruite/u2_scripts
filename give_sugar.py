@@ -151,7 +151,12 @@ class TransferUCoin:
                     page = requests.post('https://u2.dmhy.org/mpshop.php', **R_ARGS, data=data).text
                     soup = BeautifulSoup(page.replace('\n', ''), 'lxml')
                     if soup.h2 and soup.h2.text in ('Error', '错误', '錯誤', 'Ошибка'):
-                        logger.error(f"{id_info} | 转账发生错误: {soup.select('table td.text')[1].text} | data: {data}")
+                        err_msg = soup.select('table td.text')[1].text
+                        logger.error(f"{id_info} | 转账发生错误: {err_msg} | data: {data}")
+                        delay = re.findall(r'(\d+)', err_msg)
+                        if delay and int(delay[0]) <= 300:
+                            logger.info(f'将在 {int(delay[0])} 秒后重试')
+                            sleep(int(delay[0]))
                     else:
                         uc -= data['amount']
                         info['transferred'] += data['amount']
