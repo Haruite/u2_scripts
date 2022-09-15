@@ -90,7 +90,7 @@ class TransferUCoin:
         while True:
             if NUM != -1 and self.transfer_num >= NUM:
                 logger.info(f'转账人数已达到设定值 {NUM}，退出程序')
-                return
+                exit()
 
             self.parse_page()
             _list = list(self.info.keys())
@@ -118,7 +118,7 @@ class TransferUCoin:
         msg = f"{self.page_info} | {id_info}{' | ' + MSG if MSG else ''}" if INFO else MSG
 
         if self.uc_amount < uc * 1.5:
-            logger.warning(f'{id_info} | UCoin 不足 | {self.uc_amount} < {uc * 1.5:.2f}')
+            logger.warning(f"{id_info} | UCoin 不足 | {self.uc_amount} < {uc * 1.5:.2f} | {'退出程序' if EXT else '等待'}")
             if EXT:
                 exit()
             else:
@@ -186,9 +186,13 @@ class TransferUCoin:
         self.save()
         _list = list(self.info.keys())
         if _list and _list[len(_list) - 1] == self.id_info:
-            if soup.find('p', {'align': 'center'}).contents[2].name == 'a':
+            all_p = soup.find_all('p', {'align': 'center'})
+            if all_p[0].contents[2].name == 'a':
                 self.index += 1
                 self.parse_page()
+            elif all_p[1].next_sibling.name == 'p':
+                logger.info('所有楼层已发完，帖子已被锁定，退出程序')
+                exit()
 
     def validate_uid(self, id_info):
         if TEXT:
@@ -229,7 +233,7 @@ class TransferUCoin:
                     self.info[id_info]['transfer_uid'] = -uid
                     logger.info(f"{id_info} | {uid} 不是有效的用户 ID，将会给层主 {self.info[id_info]['post_uid']} 发糖")
         else:
-            if not self.info[id_info].get('transfer_uid'):
+            if 'transfer_uid' not in self.info[id_info]:
                 self.info[id_info]['transfer_uid'] = self.info[id_info]['post_uid']
                 logger.info(f"{id_info} | 将会给用户 {self.info[id_info]['post_uid']} 发糖")
 
@@ -255,12 +259,19 @@ class TransferUCoin:
         _strip_content(element)
         return ' '.join(contents)
 
+    def print_info(self):  # 这也太懒了
+        info_str = '\n'.join(f'{id_info} {info}' for id_info, info in self.info.items())
+        logger.info(f'-------------转账信息----------------\n{info_str}')
+
 
 logger.add(level='DEBUG', sink=LOG_PATH)
 t = TransferUCoin()
 while True:
     try:
         t.run()
-        break
-    except Exception as e:
-        logger.exception(e)
+    except BaseException as e:
+        if isinstance(e, (KeyboardInterrupt, SystemExit)):
+            t.print_info()
+            break
+        else:
+            logger.exception(e)
