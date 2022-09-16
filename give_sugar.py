@@ -281,7 +281,10 @@ class TransferUCoin:
                 ts = info['transferred']
                 if ts == 0:
                     _list = list(self.info.keys())
-                    state = '未开始' if _list.index(id_info) > _list.index(self.id_info) else '失败'
+                    if _list.index(id_info) > _list.index(self.id_info):
+                        state = '未开始' if NUM == -1 or fin_idx < NUM else '已取消'
+                    else:
+                        state = '失败'
                 else:
                     state = '未完成' if (isinstance(UC, int) and ts < UC
                                       or isinstance(UC, tuple) and ts < UC[1] and ts % 50000 == 0) else '已完成'
