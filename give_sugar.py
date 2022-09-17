@@ -151,12 +151,13 @@ class TransferUCoin:
 
         uc = info['expect_uc'] - info['transferred']
         uid = info['transfer_uid'] if info['transfer_uid'] > 0 else info['post_uid']
-        msg = (f"{self.page_info} | {id_info} | 计划转账 {info['expect_uc']} UCoin{' | ' + MSG if MSG else ''}"
-               if INFO else MSG)
-        logger.info(msg)
+        info_msg = f"{self.page_info} | {id_info} | 计划转账 {info['expect_uc']} UCoin"
+        msg = f"{info_msg}{' | ' + MSG if MSG else ''}" if INFO else MSG
+        logger.info(info_msg)
 
-        if self.uc_amount < uc * 1.5:
-            logger.warning(f"{id_info} | UCoin 不足 | {self.uc_amount} < {uc * 1.5:.2f} | {'退出程序' if EXT else '等待'}")
+        cost = uc * 1.5 + (int(uc / 50000) + 1) * 100
+        if self.uc_amount < cost:
+            logger.warning(f"{id_info} | UCoin 不足 | {self.uc_amount} < {cost} | {'退出程序' if EXT else '等待'}")
             if EXT:
                 exit()
             else:
@@ -177,7 +178,8 @@ class TransferUCoin:
 
         while uc > 0:
             data = {'event': '1003', 'recv': uid, 'amount': 50000 if uc >= 50000 else uc, 'message': msg}
-            for _ in range(5):
+            retries = 4
+            for _ in range(retries + 1):
                 try:
                     page = requests.post('https://u2.dmhy.org/mpshop.php', **R_ARGS, data=data).text
                     soup = BeautifulSoup(page.replace('\n', ''), 'lxml')
@@ -197,7 +199,7 @@ class TransferUCoin:
                         break
                 except Exception as er:
                     logger.error(f"{id_info} | 转账发生错误: {er} | data: {data}")
-                if _ == 4:
+                if _ == retries:
                     return
 
     def parse_page(self):
