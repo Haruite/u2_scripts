@@ -7,6 +7,7 @@ import os
 import random
 import re
 from time import sleep
+from inspect import isfunction
 
 import bs4.element
 import requests
@@ -22,7 +23,26 @@ R_ARGS = {'cookies': {'nexusphp_u2': ''},  # 网站 cookie
           'verify': True,
           }  # requests 模块参数
 URL = ''  # 帖子、种子、候选的 url，直接复制即可
-UC = 100000  # 每人转账 uc 数量，或者给定一个最小值和最大值，将会随机生成一个中间数。举例: UC = 50000, 100000
+UC = 50000
+'''设定发糖数量，有四种方法
+第一种，设定为一个固定值，例 
+UC = 50000
+
+第二种，设定一个最小值和最大值，例 
+UC = 50000, 150000 
+程序会自动从两个值之间取随机数，随机数为均匀分布，理论上平均值期望就是两者平均数
+
+第三种，设定一个最小值、平均值期望和最大值例，例
+UC = 20000, 100000, 660000
+脚本会使用幂函数来实现，公式是 最小值+x^((最大值-平均值期望)/(平均值期望-最小值))
+x 为一个随机数，最小为 0，最大让函数值达到 UC 设定的最大值
+最大值可以很大，但是越大意味着收到最小金额的概率越大
+
+第四种，设定一个随机数区间和一个函数，例
+UC = 0, 2**(6/7), lambda x: int(round(10000*(2 + x ** 7)))
+第一个数是区间下限，第二个是区间上限，第三个是函数，
+脚本将使用随机数区间生成的随机数作为函数的参数，返回值作为发糖金额
+'''
 NUM = -1  # 发糖人数， -1 表示不限制
 TEXT = True  # 是否解析回帖内容，如果不解析一律发给回复者本人，否则的话如果发给回复中解析出有效的用户 id (没有还是发给本人)
 RGX = r'(\d{2}\d+)'  # 从回复内容中解析发糖 uid 的正则表达式
@@ -102,27 +122,38 @@ class TransferUCoin:
                 for id_info in _list[index:]:
                     info = self.info[id_info]
                     if info['post_uid'] not in [self.uid, None]:
-                        if (isinstance(UC, int) and info['transferred'] < UC
-                                or isinstance(UC, tuple)
-                                and info['transferred'] < UC[1] and info['transferred'] % 50000 == 0):
+                        if info['transferred'] == 0 or 'expect_uc' in info and info['transferred'] < info['expect_uc']:
                             if i > 0 and UPDATE:
                                 self.parse_page()
                                 i += 1
                             self.batch_transfer(id_info, info)
-                        if (isinstance(UC, int) and info['transferred'] >= UC
-                                or isinstance(UC, tuple) and info['transferred'] >= UC[0]):
+                        if info['transferred'] >= info['expect_uc']:
                             self.transfer_num += 1
                     self.id_info = id_info
             else:
                 sleep(300)
 
     def batch_transfer(self, id_info, info):
-        if isinstance(UC, tuple):
-            uc = random.randint(max(UC[0], info['transferred']), UC[1]) - info['transferred']
-        else:
-            uc = UC - info['transferred']
+        if 'expect_uc' not in info:
+            if isinstance(UC, (tuple, list)):
+                if len(UC) == 2:
+                    info['expect_uc'] = random.randint(UC[0], UC[1])
+                else:
+                    if isfunction(UC[2]):
+                        info['expect_uc'] = UC[2](random.uniform(UC[0], UC[1]))
+                    else:
+                        n = (UC[2] - UC[1]) / (UC[1] - UC[0])
+                        x = pow((UC[2] - UC[0]) / 10000, 1/n)
+                        info['expect_uc'] = UC[0] + int(round((random.uniform(0, x) ** n) * 10000))
+            else:
+                info['expect_uc'] = UC
+            self.save()
+
+        uc = info['expect_uc'] - info['transferred']
         uid = info['transfer_uid'] if info['transfer_uid'] > 0 else info['post_uid']
-        msg = f"{self.page_info} | {id_info}{' | ' + MSG if MSG else ''}" if INFO else MSG
+        msg = (f"{self.page_info} | {id_info} | 计划转账 {info['expect_uc']} UCoin{' | ' + MSG if MSG else ''}"
+               if INFO else MSG)
+        logger.info(msg)
 
         if self.uc_amount < uc * 1.5:
             logger.warning(f"{id_info} | UCoin 不足 | {self.uc_amount} < {uc * 1.5:.2f} | {'退出程序' if EXT else '等待'}")
@@ -138,7 +169,7 @@ class TransferUCoin:
             for _id_info, _info in self.info.items():
                 if _id_info != id_info and 'transfer_uid' in _info:
                     _uid = _info['transfer_uid'] if _info['transfer_uid'] > 0 else _info['post_uid']
-                    if _uid == uid and _info['transferred'] >= (UC[0] if isinstance(UC, tuple) else UC):
+                    if _uid == uid and _info['transferred'] > 0 and _info['transferred'] > _info['expect_uc']:
                         times += 1
             if times >= RE:
                 logger.info(f"{id_info} | 已经给用户 {uid} 转账 {times} 次，跳过")
@@ -286,8 +317,7 @@ class TransferUCoin:
                     else:
                         state = '失败'
                 else:
-                    state = '未完成' if (isinstance(UC, int) and ts < UC
-                                      or isinstance(UC, tuple) and ts < UC[1] and ts % 50000 == 0) else '已完成'
+                    state = '未完成' if ts < info['expect_uc'] else '已完成'
                 if state == '已完成':
                     fin_idx += 1
                 contents.append(f"{idx} | {fin_idx if state == '已完成' else '无'} | {id_info} | {info['post_uid']} | "
