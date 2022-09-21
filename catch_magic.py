@@ -57,7 +57,6 @@ class CatchMagic:
     pre_suf = [['时区', '，点击修改。'], ['時區', '，點擊修改。'], ['Current timezone is ', ', click to change.']]
 
     def __init__(self):
-        logger.add(level='DEBUG', sink=LOG_PATH, rotation='2 MB')
         self.checked, self.magic_id_0 = deque([], maxlen=200), None
         with open(DATA_PATH, 'a', encoding='utf-8'):
             pass
@@ -78,32 +77,31 @@ class CatchMagic:
         while True:
             soup = self.get_soup(f'https://u2.dmhy.org/promotion.php?action=list&page={index}')
             user_id = soup.find('table', {'id': 'info_block'}).a['href'][19:]
+
             for i, tr in filter(lambda tup: tup[0] > 0, enumerate(soup.find('table', {'width': '99%'}))):
                 magic_id = int(tr.contents[0].string)
                 if index == 0 and i == 1:
                     self.magic_id_0 = magic_id
                     if self.first_time and id_0 and magic_id - id_0 > 10 * INTERVAL:
                         all_checked = True
-                if tr.contents[5].string in ['Expired', '已失效']:
+                if tr.contents[5].string in ['Expired', '已失效'] or magic_id == id_0:
                     all_checked = True
                     break
+
                 if tr.contents[1].string in ['魔法', 'Magic', 'БР']:
-                    if not tr.contents[3].a and tr.contents[3].string in ['所有人', 'Everyone', 'Для всех'] or \
-                            MAGIC_SELF and tr.contents[3].a and tr.contents[3].a['href'][19:] == user_id:
+                    if not tr.contents[3].a and tr.contents[3].string in ['所有人', 'Everyone', 'Для всех'] \
+                            or MAGIC_SELF and tr.contents[3].a and tr.contents[3].a['href'][19:] == user_id:
                         if tr.contents[5].string not in ['Terminated', '终止', '終止', 'Прекращён']:
                             if tr.contents[2].a:
                                 tid = int(tr.contents[2].a['href'][15:])
-                                if magic_id not in self.checked and magic_id != id_0:
+                                if magic_id not in self.checked:
                                     if self.first_time and all_checked:
                                         self.checked.append(magic_id)
                                     else:
                                         yield magic_id, tid
                                     continue
 
-                if magic_id == id_0:
-                    all_checked = True
-                    break
-                elif magic_id not in self.checked:
+                if magic_id not in self.checked:
                     self.checked.append(magic_id)
 
             if all_checked:
@@ -327,6 +325,8 @@ def main(catch):
                 gc.collect()
                 sleep(INTERVAL)
 
+
+logger.add(level='DEBUG', sink=LOG_PATH, rotation='2 MB')
 
 c = CatchMagic()
 if RUN_CRONTAB:
