@@ -61,7 +61,7 @@ CONFIG = {  # 应该跟 json 差不多，放到 ide 里方便能看出错误
             'password': ''  # web 密码
         },
         {
-            'type': 'rutorrent',  # 'ru', 'Rutorrent', 'rutorrent'
+            'type': 'rutorrent',  # 'ru', 'RuTorrent', 'rutorrent'
             'url': 'https://127.0.0.1/rutorrent',  # rtinst 安装完是这样的
             'username': '',  # web 用户名
             'password': '',  # web 密码
@@ -195,7 +195,7 @@ class BtClient(metaclass=ABCMeta):
 
         :param keys: 包含种子信息相关键的列表，取值在 all_keys 中
         :return: 以种子 hash 为键，种子信息（一个字典，键为 keys 中的值）为值的字典。
-        如果使用 deluge 以外客户端，需要按照 all_keys 中的说明返回指定类型数据
+         如果使用 deluge 以外客户端，需要按照 all_keys 中的说明返回指定类型数据
         """
         pass
 
@@ -305,7 +305,7 @@ class Transmission(transmission_rpc.Client, BtClient):
                 for torrent in self.call('get_torrents') if torrent.status == 'seeding'}
 
 
-class Rutorrent(BtClient):
+class RuTorrent(BtClient):
     tr_keys = {'tracker', 'total_seeds'}
 
     def __init__(self, url, username, password, **kwargs):
@@ -414,7 +414,8 @@ class UTorrent(BtClient):
                     logger.error(e)
                     sleep(0.3 * 2 ** i)
 
-    def get_state(self, num, rem):
+    @staticmethod
+    def get_state(num, rem):
         """状态有很多种，这里敷衍一下和 rutorrent 一样"""
         if num % 2 == 0:
             return 'paused'
@@ -819,7 +820,7 @@ if sys.platform == 'win32':
 class_to_name = {Deluge: ['de', 'Deluge', 'deluge'],
                  Qbittorrent: ['qb', 'QB', 'qbittorrent', 'qBittorrent'],
                  Transmission: ['tr', 'Transmission', 'transmission'],
-                 Rutorrent: ['ru', 'Rutorrent', 'rutorrent'],
+                 RuTorrent: ['ru', 'RuTorrent', 'rutorrent'],
                  UTorrent: ['ut', 'UT', 'utorrent', 'uTorrent', 'µTorrent']}
 name_to_class = {name: cls for cls, lst in class_to_name.items() for name in lst}
 
