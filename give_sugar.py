@@ -126,14 +126,15 @@ class TransferUCoin:
                             if i > 0 and UPDATE:
                                 self.parse_page()
                                 i += 1
-                            self.batch_transfer(id_info, info)
+                            self.batch_transfer(id_info)
                         if info['transferred'] >= info['expect_uc']:
                             self.transfer_num += 1
                     self.id_info = id_info
             else:
                 sleep(300)
 
-    def batch_transfer(self, id_info, info):
+    def batch_transfer(self, id_info):
+        info = self.info[id_info]
         if 'expect_uc' not in info:
             if isinstance(UC, (tuple, list)):
                 if len(UC) == 2:
@@ -163,7 +164,7 @@ class TransferUCoin:
             else:
                 sleep(900)
                 self.parse_page()
-                self.batch_transfer(id_info, info)
+                self.batch_transfer(id_info)
 
         times = 0
         if RE != -1:
