@@ -171,7 +171,7 @@ class TransferUCoin:
             for _id_info, _info in self.info.items():
                 if _id_info != id_info and 'transfer_uid' in _info:
                     _uid = _info['transfer_uid'] if _info['transfer_uid'] > 0 else _info['post_uid']
-                    if _uid == uid and _info['transferred'] > 0 and _info['transferred'] > _info['expect_uc']:
+                    if _uid == uid and _info['transferred'] >= _info['expect_uc']:
                         times += 1
             if times >= RE:
                 logger.info(f"{id_info} | 已经给用户 {uid} 转账 {times} 次，跳过")
