@@ -1419,10 +1419,9 @@ class MagicAndLimit:
             if self.to['max_upload_speed'] == 5120:
                 # 在 optimize_announce_time 用到了这个，也可以手动限速到 5120k 等待汇报
                 if self.this_up / self.this_time < 52428800 and self.this_time >= 900:
-                    if not ('lft' in self.to and time() - self.to['lft'] < 900):
-                        self.re_an()
-                        self.client.set_upload_limit(self.to['_id'], -1)
-                        logger.info('Average upload speed below 50MiB/s, remove 5120K up-limit')
+                    self.re_an()
+                    self.client.set_upload_limit(self.to['_id'], -1)
+                    logger.info('Average upload speed below 50MiB/s, remove 5120K up-limit')
             elif self.this_time < 120:  # 已经汇报完，解除上传限速
                 self.client.set_upload_limit(self.to['_id'], -1)
                 logger.info(f'Removed upload speed limit of torrent {self.to["tid"]}.')
@@ -1435,9 +1434,10 @@ class MagicAndLimit:
                 elif max_upload_speed < 0:  # 上传量超过了一个汇报间隔内不超速的最大值
                     if self.this_up / self.this_time < 209715200:
                         if self.this_time >= 900:
-                            self.re_an()
-                            logger.error(f'Failed to limit upload speed limit of torrent {self.to["tid"]} '
-                                         f'because the upload exceeded')
+                            if not ('lft' in self.to and time() - self.to['lft'] < 900):
+                                self.re_an()
+                                logger.error(f'Failed to limit upload speed limit of torrent {self.to["tid"]} '
+                                             f'because the upload exceeded')
                     else:
                         self.client.set_upload_limit(self.to['_id'], 1)
                 elif 8192 < max_upload_speed < 51200 and eta > 180:
@@ -1654,6 +1654,8 @@ class MagicAndLimit:
                         self.to['next_announce'] = self.announce_interval - idle + 1
                         if self.to['next_announce'] < 0:
                             self.to['next_announce'] = 0
+
+                    break
 
 
 if __name__ == '__main__':
