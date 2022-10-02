@@ -14,7 +14,11 @@ from ssl import SSLError
 from collections import deque
 import os
 
-MIN_FREE_SPACE = 3725  # 最小剩余空间(GiB)，小于这个值删种
+MIN_FREE_SPACE = 3725  # 最小剩余空间(GiB)，当下载速度未超过临界值 MAX_DR 时小于这个值删种
+MIN_FREE_SPACE_LOWER = 3725 / 3
+'''当下载速度超过临界值 MAX_DR 时小于这个值删种。
+硬盘空间足够的话建议两个值的差 1024(1TB) 以上'''
+MAX_DR = 50 * 1024 ** 2  # 下载速度临界值
 MODE = 1  # 为 1 时先删除做种中的种子，删完后再删下载中的种子；否则综合考虑一起删
 KS = 0  # 按做种人数分配的权重占 40% 的比例，取值范围 [0, 1]，为 0 代表不考虑做种人数，这个参数的目的在于延长孤种的保种时间
 INTERVAL = 600  # 删种的时间间隔
@@ -22,9 +26,6 @@ MIN_DOWN_TIME = 3600  # 下载时间小于这个值不删
 S0 = 300
 LOG_PATH = ''
 EXCLUDE_LABELS = ['seed', 'public']  # 如果种子有这些标签，删种时会跳过
-
-log_path = LOG_PATH or f'{os.path.splitext(__file__)[0]}.log'
-logger.add(level='DEBUG', sink=log_path, encoding='utf-8', rotation="5 MB")
 
 
 class Deluge(LocalDelugeRPCClient):
@@ -63,6 +64,7 @@ class AutoDel:
         self.sur = deque(maxlen=100)
         self.free_space = MIN_FREE_SPACE * 1024 ** 3
         self.torrent_status = {}
+        self.ses_dr = 0
         self.torrent_keys = ['active_time', 'download_payload_rate', 'name', 'state',
                              'seeding_time', 'total_peers', 'total_seeds', 'total_size',
                              'total_done', 'total_uploaded', 'upload_payload_rate', 'label'
@@ -81,6 +83,8 @@ class AutoDel:
             seed_ur += data['upload_payload_rate']
         self.sur.append(seed_ur)
 
+        self.ses_dr = self.client.core.get_session_status(['download_rate'])['download_rate']
+
         if self.free_space < MIN_FREE_SPACE * 1024 ** 3:
             self.torrent_status = self.client.core.get_torrents_status({}, self.torrent_keys)
             if not isinstance(self.torrent_status, dict):
@@ -95,12 +99,13 @@ class AutoDel:
                         break
                     except:
                         pass
-                if self.free_space >= MIN_FREE_SPACE * 1024 ** 3:
+                min_space = (MIN_FREE_SPACE if self.ses_dr < MAX_DR else MIN_FREE_SPACE_LOWER) * 1024 ** 3
+                if self.free_space >= min_space:
                     logger.debug(f'There is free space {self.free_space / 1024 ** 3:.3f} GiB. '
                                  f'No need to del any torrents.')
                 else:
                     indicator, info = self.weight()
-                    while self.free_space < MIN_FREE_SPACE * 1024 ** 3:
+                    while self.free_space < min_space:
                         if not indicator:
                             break
                         i = indicator.index(min(indicator))
@@ -198,5 +203,8 @@ class AutoDel:
 
         return indicator, info
 
+
+log_path = LOG_PATH or f'{os.path.splitext(__file__)[0]}.log'
+logger.add(level='DEBUG', sink=log_path, encoding='utf-8', rotation="5 MB")
 
 AutoDel(Deluge()).run()
