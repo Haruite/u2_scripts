@@ -494,23 +494,29 @@ class MagicInfo(UserDict):
 
 
 class Request:
+    u2_args = CONFIG['requests_args']
+    api_args = {'timeout': CONFIG['requests_args'].get('timeout'),
+                'proxy': CONFIG['requests_args'].get('proxy')}
+
     def __init__(self):
         self.session = None
-        self.u2_args = CONFIG['requests_args']
-        self.api_args = {'timeout': CONFIG['requests_args'].get('timeout'),
-                         'proxy': CONFIG['requests_args'].get('proxy')}
 
     async def request(self, url, method='get', retries=5, **kwargs) -> (
             Union[str, Dict[str, Union[str, Dict[str, List[Dict[str, Union[str, int, None]]]]]]]
     ):
+        """异步 http 请求
+
+        Examples
+        --------
+        >>> async with aiohttp.ClientSession() as self.session:
+        ...     tasks = []
+        ...     await asyncio.gather(*tasks)
+        """
         if url.startswith('https://u2.dmhy.org'):
             [kwargs.setdefault(key, val) for key, val in self.u2_args.items()]
         else:
             [kwargs.setdefault(key, val) for key, val in self.api_args.items()]
         kwargs.setdefault('timeout', 10)
-
-        if self.session is None:
-            self.session = aiohttp.ClientSession()
 
         for i in range(retries + 1):
             try:
@@ -527,10 +533,6 @@ class Request:
                     logger.error(e)
                 elif isinstance(e, asyncio.TimeoutError):
                     kwargs['timeout'] += 20
-
-    async def close(self) -> None:
-        if self.session is not None:
-            await self.session.close()
 
 
 class MagicSeed(Request):
@@ -563,12 +565,14 @@ class MagicSeed(Request):
                             if data['total_size'] >= CONFIG['magic_for_self']['min_size'] * 1024 ** 3:
                                 tasks.append(self.check_torrent(_id, data['name']))
 
-        res = await asyncio.gather(*tasks)
+        async with aiohttp.ClientSession() as self.session:
+            res = await asyncio.gather(*tasks)
         self.magic_info.del_unused()
 
         magic_tasks = [self.send_magic(__id, _tid, {'user': 'SELF', 'hours': 24, 'ur': 2.33, 'dr': 1})
                        for __id, _tid, ur_233 in res if _tid and __id not in self.magic_info]
-        await asyncio.gather(*magic_tasks)
+        async with aiohttp.ClientSession() as self.session:
+            await asyncio.gather(*magic_tasks)
         self.magic_info.save()
 
     async def check_torrent(self, _id, name):
@@ -761,7 +765,8 @@ class Run(MagicSeed):
             logger.info(f'There are only {len(_id_list)} torrents which num of seeders < {num}  --> {_id_list}')
 
         tasks = [self.check_torrent(_id, info[_id]['name']) for _id in _id_list]
-        res = await asyncio.gather(*tasks)
+        async with aiohttp.ClientSession() as self.session:
+            res = await asyncio.gather(*tasks)
         self.magic_info.del_unused()
 
         magic_tasks = []
@@ -779,7 +784,8 @@ class Run(MagicSeed):
                     magic_tasks.append(self.send_magic(__id, _tid, {'user': 'ALL', 'hours': hr, 'ur': 1, 'dr': 0}))
                     magic_tasks.append(self.send_magic(__id, _tid, {'user': 'SELF', 'hours': hr, 'ur': 2.33, 'dr': 1}))
 
-        await asyncio.gather(*magic_tasks)
+        async with aiohttp.ClientSession() as self.session:
+            await asyncio.gather(*magic_tasks)
         self.magic_info.save()
 
     def magic_for_all(self):
