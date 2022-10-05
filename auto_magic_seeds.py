@@ -27,7 +27,7 @@ from functools import wraps
 from ssl import SSLError
 from datetime import datetime
 from time import time, sleep
-from typing import Union, Dict, List
+from typing import Dict, List
 
 from bs4 import BeautifulSoup
 from loguru import logger
@@ -513,10 +513,10 @@ class Request:
     def __init__(self):
         self.session = None
 
-    async def request(self, url, method='get', retries=5, **kwargs) -> (
-            Union[str, Dict[str, Union[str, Dict[str, List[Dict[str, Union[str, int, None]]]]]]]
-    ):
+    async def request(self, url, method='get', retries=5, **kwargs):
         """异步 http 请求
+
+        :rtype: str | Dict[str, str | Dict[str, List[Dict[str, str | int | None]]]]
 
         Examples
         --------
@@ -721,8 +721,7 @@ class MagicSeed(Request):
                     return
                 self.magic_info[_id] = {'uc': uc}
 
-                url = f'https://u2.dmhy.org/promotion.php?action=magic&torrent={tid}'
-                p2 = await self.request(url, method='post', retries=0, data=data)
+                p2 = await self.request('https://u2.dmhy.org/promotion.php', method='post', retries=0, data=data)
                 if re.match(r'^<script.+<\/script>$', p2):
                     logger.info(f"Sent a {data['ur']}x upload and {data['dr']}x download "
                                 f"magic to torrent {_id}, tid: {tid}, user {data['user'].lower()}, "
