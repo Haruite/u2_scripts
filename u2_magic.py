@@ -90,7 +90,7 @@ magic:
     default_hours: 24  
     # 如果魔法规则没有指定魔法时长，则默认魔法为此时长
 
-    min_tid: 47586  
+    min_tid: 49412  
     # 种子 id 超过这个值纳入新种的判断范围
     # 这个参数存在的原因在于，下载种子页没有提供种子的发布时间信息，下载人数也没法判断（刚加入的时候可能下载数为 0）
     # 但我又不想每个种子都去查详情页（想象一下同时下载 1000 个种子），所以决定将 tid 大于一定数值才去判断
@@ -110,7 +110,7 @@ magic:
     default_ratio: 3  
     # 种子默认分享率，用于魔法规则估计上传量
 
-    min_connect_times_before_announce: 3.6  
+    min_connect_times_before_announce: 20  
     # 这个值是检查放魔法的时间用的，比如说客户端连接时间 5s，
     # 给自己放魔法的话，在距离汇报时间小于 3.6 × 5s 的时候
 
@@ -260,7 +260,7 @@ clients:
         password:   
         # 密码，本地客户端不用填
 
-        connect_interval: 5  
+        connect_interval: 1  
         # 读取客户端状态的间隔，根据经验设为 5s 一般加入种子 8s 内可以放完魔法（如果马上就要放的话）
 
         min_announce_interval: 300  
@@ -1182,15 +1182,13 @@ class MagicAndLimit:
         url = f'https://u2.dmhy.org/promotion.php?action=magic&torrent={tid}'
 
         try:
-            soup = BeautifulSoup(self.rq('get', url).text, 'lxml')
-            data = {h['name']: h['value'] for h in soup.find_all('input', {'type': 'hidden'})}
-            data.update({'user_other': conf['uid'], 'start': 0, 'promotion': 8, 'comment': ''})
+            data = {'action': 'magic', 'divergence': '', 'base_everyone': '', 'base_self': '', 'base_other': '',
+                    'torrent': tid, 'tsize': '', 'ttl': '', 'user_other': '', 'start': 0, 'promotion': 8, 'comment': ''}
             data.update(_data)
             response = self.rq('post', 'https://u2.dmhy.org/promotion.php?test=1', data=data).json()
             if response['status'] == 'operational':
                 uc = int(float(BeautifulSoup(response['price'], 'lxml').span['title'].replace(',', '')))
-                url = f'https://u2.dmhy.org/promotion.php?action=magic&torrent={tid}'
-                _post = self.rq('post', url, retries=1, data=data)
+                _post = self.rq('post', 'https://u2.dmhy.org/promotion.php', retries=1, data=data)
                 if _post.status_code == 200:
                     self.magic_info.append({**_data, **{'tid': tid, 'ts': int(time()), 'uc': uc}})
                     self.write_info()
