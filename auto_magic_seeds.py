@@ -120,7 +120,12 @@ class CheckKeys:
 
     def __call__(self, func):
         """检查 keys 参数是否受支持，以及返回值类型是否符合
-        用于 BT 客户端获取种子信息的函数，自定义客户端只有满足这些要求才能正确运行"""
+        用于 BT 客户端获取种子信息的函数，自定义客户端只有满足这些要求才能正确运行
+
+        Raises:
+            ValueError: 如果存在 key 不在 all_keys 中
+            TypeError: 如果返回值不是字典或者 key 对应的值不是相应类型
+        """
 
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -186,6 +191,7 @@ class BtClient(metaclass=ABCMeta):
     def call(self, method, *args, **kwargs):
         """
         :param method: 方法
+        :type method: str
         """
         pass
 
@@ -194,14 +200,20 @@ class BtClient(metaclass=ABCMeta):
         """获取所有活动的种子信息
 
         :param keys: 包含种子信息相关键的列表，取值在 all_keys 中
+        :type keys: List[str]
         :return: 以种子 hash 为键，种子信息（一个字典，键为 keys 中的值）为值的字典。
          如果使用 deluge 以外客户端，需要按照 all_keys 中的说明返回指定类型数据
+        :rtype: Dict[str, Dict[str, Any]]
         """
         pass
 
     @abstractmethod
     def seeding_torrents_info(self, keys):
-        """获取所有做种中的种子信息"""
+        """获取所有做种中的种子信息
+
+        :type keys: List[str]
+        :rtype: Dict[str, Dict[str, Any]]
+        """
         pass
 
 
@@ -510,6 +522,8 @@ class Request:
         --------
         >>> async with aiohttp.ClientSession() as self.session:
         ...     tasks = []
+        ...     for index in range(3):
+        ...         tasks.append(self.request(f"https://u2.dmhy.org/torrents.php?page={index}"))
         ...     await asyncio.gather(*tasks)
         """
         if url.startswith('https://u2.dmhy.org'):
@@ -674,17 +688,19 @@ class MagicSeed(Request):
         dt = datetime.strptime(date, '%Y-%m-%d %H:%M:%S')
         return tz.localize(dt).timestamp()
 
-    async def send_magic(self, _id, tid, _data: Dict):
-        page = await self.request(f'https://u2.dmhy.org/promotion.php?action=magic&torrent={tid}')
-        soup = BeautifulSoup(page, 'lxml')
-        hidden = soup.find_all('input', {'type': 'hidden'})
-        if not hidden:
-            logger.error(f'Torrent {_id}, tid: {tid} was not found in site...')
-            self.magic_info[_id] = {'ts': int(time()) + 86400 * 3}
-            return
-        data = {h['name']: h['value'] for h in hidden}
-        data.update({'user_other': '', 'start': 0, 'promotion': 8, 'comment': ''})
-        data.update({'user': 'SELF', 'hours': 24, 'ur': 2.33, 'dr': 1})
+    async def send_magic(self, _id, tid, _data):
+        """异步施加魔法.
+
+        手动放魔法的话需要检查魔法页面，脚本省去了这个过程，
+        因为实在是太耗时了，尤其是在下载拉满的时候.
+
+        Args:
+            _id (str): 种子 hash
+            tid (str | int): 种子 id
+            _data (Dict[str, None | str | int | float]): 包含 ur, dr, hours, user 魔法信息的字典
+        """
+        data = {'action': 'magic', 'divergence': '', 'base_everyone': '', 'base_self': '', 'base_other': '',
+                'torrent': tid, 'tsize': '', 'ttl': '', 'user_other': '', 'start': 0, 'promotion': 8, 'comment': ''}
         data.update(_data)
 
         try:
