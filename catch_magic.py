@@ -20,7 +20,7 @@ from requests import get, ReadTimeout
 from bs4 import BeautifulSoup
 from loguru import logger
 
-COOKIES = {'nexusphp_u2': ''}  # type: Union[Dict[str, Union[str, None]], None]
+COOKIES = {'nexusphp_u2': ''}  # type: Dict[str, str]
 '''网站 cookie'''
 BK_DIR = '/root/backup'  # type: str
 '''备份种子文件夹路径'''
