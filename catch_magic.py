@@ -14,43 +14,71 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from time import sleep, time
+from typing import Dict, List, Union, Any
 
 from requests import get, ReadTimeout
 from bs4 import BeautifulSoup
 from loguru import logger
 
-RUN_CRONTAB = False  # 如果为真，代表脚本不会死循环，运行一次脚本退出，需要以一定间隔运行脚本，主要解决内存问题；否则一直循环运行不退出。
-RUN_TIMES = 1  # RUN_CRONTAB 为真时运行脚本一次 run 函数循环的次数，默认运行一次脚本结束，但如果频繁运行影响性能的话可以改大
-API_TOKEN = ''  # 填了将默认通过 api 获取最新的魔法信息，否则直接从网页获取
-UID = 50096  # 访问 api 需要将此改为自己的 uid，否则不用管
-R_ARGS = {'headers': {'cookie': 'nexusphp_u2=',  # 填网站 cookie，不要空格
-                      'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                                    'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/104.0.5112.81 Safari/537.36'
-                      },
-          'timeout': 20,  # 超时秒数
-          'proxies': {  # 'http': "127.0.0.1:10809", 'https': "127.0.0.1:10809"  # 代理
+COOKIES = {'nexusphp_u2': ''}  # type: Union[Dict[str, Union[str, None]], None]
+'''网站 cookie'''
+BK_DIR = '/root/backup'  # type: str
+'''备份种子文件夹路径'''
+WT_DIR = '/de/wt'  # type: str
+'''BT 客户端监控文件夹'''
+INTERVAL = 120  # type: Union[int, float]
+'''检查魔法的时间间隔'''
+API_TOKEN = ''  # type: str
+'''填了将默认通过 api 获取最新的魔法信息，否则直接从网页获取'''
+UID = 50096  # type: int
+'''访问 api 需要将此改为自己的 uid，否则不用管'''
+RUN_CRONTAB = False  # type: Any
+'''如果为真，代表脚本不会死循环，运行一次脚本退出，需要以一定间隔运行脚本，主要解决内存问题；否则一直循环运行不退出'''
+RUN_TIMES = 1  # type: int
+'''RUN_CRONTAB 为真时运行脚本一次 run 函数循环的次数，默认运行一次脚本结束，但如果频繁运行影响性能的话可以改大'''
+PROXIES = {'http': '', 'https': ''}  # type: Union[Dict[str, Union[str, None]], None]
+'''代理'''
+MAX_SEEDER_NUM = 5  # type: int
+'''最大的做种人数，超过不下载'''
+LOG_PATH = f'{os.path.splitext(__file__)[0]}.log'  # type: str
+'''日志文件路径'''
+DATA_PATH = f'{os.path.splitext(__file__)[0]}.data.txt'  # type: str
+'''数据文件路径'''
+DOWNLOAD_NON_FREE = False  # type: Any
+'''如果为真为下载不是 free 的种子，否则的话只下载 free 的种子'''
+MIN_DAY = 7  # type: Union[int, float]
+'''种子发布时间超过此天数判断为旧种子，否则判断为新种子'''
+DOWNLOAD_OLD = True  # type: Any
+'''是否下载旧种子'''
+DOWNLOAD_NEW = False  # type: Any
+'''是否下载新种子'''
+MAGIC_SELF = False  # type: Any
+'''如果为真，会下载给自己放魔法的种子，否则不下载'''
+EFFECTIVE_DELAY = 60  # type: Union[int, float]
+'''如果该魔法是 free 并且生效时间在此之内，就算种子不是 free 也直接下载'''
+DOWNLOAD_DEAD_TO = False  # type: Any
+'''默认不下载无人做种的旧种子(新种总有人做种，所以不考虑有没有人做种一律下载)，如果要下载改成 True'''
+RE_DOWNLOAD = True  # type: Any
+'''如果为 False，检测到备份文件夹有该种子则不再次下载'''
+CHECK_PEERLIST = False  # type: Any
+'''检查 peer 列表，如果已经在做种或者在下载则不下载种子'''
+DA_QIAO = True  # type: Any
+'''是否搭桥，如果搭桥，即使做种人数超过最大值魔法咒语有’搭桥‘或’加速‘也会下载'''
+MIN_RE_DL_DAYS = 0  # type: Union[int, float]
+'''离最近一次下载该种子的最小天数，小于这个天数不下载种子'''
+CAT_FILTER = []  # type: List[str]
+'''种子类型为其中之一则下载，类型见 torrents.php，多个用逗号隔开，不填就不进行类型过滤，比如 ['BDMV', 'Lossless Music']'''
+SIZE_FILTER = [0, -1]  # type: List[Union[int, float]]
+'''体积过滤，第一个数为体积最小值(GB)，第二个为最大值(GB)，-1 表示不设上限'''
+NAME_FILTER = []  # type: List[str]
+'''过滤种子标题，如果标题或者文件名中包含这些字符串之一则排除不下载，多个用逗号隔开，字符串要加引号，比如 ['BDrip']'''
+R_ARGS = {'cookies': {'nexusphp_u2': ''},
+          'headers': {'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                      'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/104.0.5112.81 Safari/537.36'},
+          'timeout': 20,
+          'proxies': {'http': '', 'https': ''}
           }
-          }  # requests 模块参数
-BK_DIR = '/root/backup'  # 备份种子文件夹路径
-WT_DIR = '/de/wt'  # BT 客户端监控文件夹
-INTERVAL = 120  # 检查魔法的时间间隔
-MAX_SEEDER_NUM = 5  # 最大的做种人数，超过不下载
-LOG_PATH = f'{os.path.splitext(__file__)[0]}.log'  # 日志文件路径
-DATA_PATH = f'{os.path.splitext(__file__)[0]}.data.txt'  # 数据文件路径
-DOWNLOAD_NON_FREE = False  # 如果为真为下载不是 free 的种子，否则的话只下载 free 的种子
-MIN_DAY = 7  # 种子发布时间超过此天数判断为旧种子，否则判断为新种子
-DOWNLOAD_OLD = True  # 是否下载旧种子
-DOWNLOAD_NEW = False  # 是否下载新种子
-MAGIC_SELF = False  # 如果为真，会下载给自己放魔法的种子，否则不下载
-EFFECTIVE_DELAY = 60  # 如果该魔法是 free 并且生效时间在此之内，就算种子不是 free 也直接下载
-DOWNLOAD_DEAD_TO = False  # 默认不下载无人做种的旧种子(新种总有人做种，所以不考虑有没有人做种一律下载)，如果要下载改成 True
-RE_DOWNLOAD = True  # 如果为 False，检测到备份文件夹有该种子则不再次下载
-CHECK_PEERLIST = False  # 检查 peer 列表，如果已经在做种或者在下载则不下载种子
-DA_QIAO = True  # 是否搭桥，如果搭桥，即使做种人数超过最大值魔法咒语有’搭桥‘或’加速‘也会下载
-MIN_RE_DL_DAYS = 0  # 离最近一次下载该种子的最小天数，小于这个天数不下载种子
-CAT_FILTER = []  # 种子类型为其中之一则下载，类型见 torrents.php，多个用逗号隔开，不填就不进行类型过滤，比如 ['BDMV', 'Lossless Music']
-SIZE_FILTER = [0, -1]  # 体积过滤，第一个数为体积最小值(GB)，第二个为最大值(GB)，-1 表示不设上限
-NAME_FILTER = []  # 过滤种子标题，如果标题或者文件名中包含这些字符串之一则排除不下载，多个用逗号隔开，字符串要加引号，比如 ['BDrip']
+'''requests 模块参数'''
 
 
 class CatchMagic:
