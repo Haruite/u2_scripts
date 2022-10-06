@@ -12,20 +12,28 @@ from deluge_client import LocalDelugeRPCClient, FailedToReconnectException
 from loguru import logger
 from ssl import SSLError
 from collections import deque
+from typing import Union, Any, Tuple, List
 import os
 
-MIN_FREE_SPACE = 3725  # 最小剩余空间(GiB)，当下载速度未超过临界值 MAX_DR 时小于这个值删种
-MIN_FREE_SPACE_LOWER = 3725 / 3
+MIN_FREE_SPACE = 3725  # type: Union[int, float]
+'''最小剩余空间(GiB)，当下载速度未超过临界值 MAX_DR 时小于这个值删种'''
+MIN_FREE_SPACE_LOWER = 3725 / 3  # type: Union[int, float]
 '''当下载速度超过临界值 MAX_DR 时小于这个值删种。
 硬盘空间足够的话建议两个值的差 1024(1TB) 以上'''
-MAX_DR = 50 * 1024 ** 2  # 下载速度临界值
-MODE = 1  # 为 1 时先删除做种中的种子，删完后再删下载中的种子；否则综合考虑一起删
-KS = 0  # 按做种人数分配的权重占 40% 的比例，取值范围 [0, 1]，为 0 代表不考虑做种人数，这个参数的目的在于延长孤种的保种时间
-INTERVAL = 600  # 删种的时间间隔
-MIN_DOWN_TIME = 3600  # 下载时间小于这个值不删
-S0 = 300
-LOG_PATH = ''
-EXCLUDE_LABELS = ['seed', 'public']  # 如果种子有这些标签，删种时会跳过
+MAX_DR = 10 * 1024 ** 2  # type: Union[int, float]
+'''下载速度临界值'''
+MODE = 1  # type: Any
+'''为 1 时先删除做种中的种子，删完后再删下载中的种子；否则综合考虑一起删'''
+KS = 0.5  # type: Union[int, float]
+'''按做种人数分配的权重占 40% 的比例，取值范围 [0, 1]，为 0 代表不考虑做种人数，这个参数的目的在于延长孤种的保种时间'''
+INTERVAL = 600  # type: Union[int, float]
+'''删种的时间间隔'''
+MIN_DOWN_TIME = 3600  # type: Union[int, float]
+'''下载时间小于这个值不删'''
+S0 = 300  # type: Union[int, float]
+LOG_PATH = ''  # type: str
+EXCLUDE_LABELS = ['seed', 'public']  # type: Union[Tuple[Any, ...], List[str]]
+'''如果种子有这些标签，删种时会跳过'''
 
 
 class Deluge(LocalDelugeRPCClient):
