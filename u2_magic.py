@@ -110,7 +110,7 @@ magic:
     default_ratio: 3  
     # 种子默认分享率，用于魔法规则估计上传量
 
-    min_connect_times_before_announce: 20  
+    min_connect_times_before_announce: 13  
     # 这个值是检查放魔法的时间用的，比如说客户端连接时间 5s，
     # 给自己放魔法的话，在距离汇报时间小于 3.6 × 5s 的时候
 
@@ -260,7 +260,7 @@ clients:
         password:   
         # 密码，本地客户端不用填
 
-        connect_interval: 1  
+        connect_interval: 1.5  
         # 读取客户端状态的间隔，根据经验设为 5s 一般加入种子 8s 内可以放完魔法（如果马上就要放的话）
 
         min_announce_interval: 300  
