@@ -22,7 +22,7 @@ COOKIES = {'nexusphp_u2': ''}  # type: Dict[str, str]
 '''网站 cookie'''
 PROXIES = {'http': '', 'https': ''}  # type: Union[Dict[str, Union[str, None]], None]
 '''代理'''
-UC = 50000  # type: Union[int, Tuple[int, int], Tuple[int, int, int], Tuple[Union[int, float], Union[int, float], Callable], List[Union[int, float, Callable]]]
+UC = 50000  # type: Union[int, Tuple[int, int], Tuple[int, int, Union[int, float]], Tuple[Union[int, float], Union[int, float], Callable], List[Union[int, float, Callable]]]
 '''设定发糖数量，有四种方法
 第一种，设定为一个固定值，例 
 UC = 50000
