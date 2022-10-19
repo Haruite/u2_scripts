@@ -1007,7 +1007,7 @@ class MagicAndLimit:
         if 'total_size' in self.to:
             s = int(self.to['total_size'] / 1024 ** 3) + 1
         else:
-            [num, unit] = self.to['size'].split(' ')[0]
+            [num, unit] = self.to['size'].split(' ')
             s = 1 if unit in ['MiB', '喵', 'MiБ'] else (
                     int(float(num) * 1024 if unit in ['TiB', '烫', 'TiБ'] else float(num)) + 1)
         ttl = self.deta / 2592000
