@@ -714,7 +714,8 @@ class MagicSeed(Request):
                     self.magic_info[_id] = {'ts': int(time())}
                     return
 
-                if self.magic_info.cost() > CONFIG['total_uc_max']:
+                cost = self.magic_info.cost()
+                if cost > CONFIG['total_uc_max']:
                     secs = min(self.magic_info.min_secs(), 1800)
                     logger.warning(f'24h ucoin usage exceeded, Waiting for {secs}s ------ | data: {data}')
                     await asyncio.sleep(secs)
@@ -725,7 +726,7 @@ class MagicSeed(Request):
                 if re.match(r'^<script.+<\/script>$', p2):
                     logger.info(f"Sent a {data['ur']}x upload and {data['dr']}x download "
                                 f"magic to torrent {_id}, tid: {tid}, user {data['user'].lower()}, "
-                                f"duration {data['hours']}h, uc usage {uc}, 24h total {self.magic_info.cost()}")
+                                f"duration {data['hours']}h, uc usage {uc}, 24h total {cost + uc}")
                     self.magic_info[_id] = {'ts': int(time())}
                 else:
                     logger.error(f'Failed to send magic to torrent {_id}, id: {tid} | data: {data}')
