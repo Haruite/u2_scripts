@@ -39,7 +39,7 @@ import subprocess
 import paramiko
 import pytz
 
-from functools import reduce
+from functools import reduce, lru_cache
 from datetime import datetime
 from collections import deque, UserList
 from time import time, sleep
@@ -179,6 +179,8 @@ enable_debug_output = True  # type: Any
 '为真时会输出 debug 级别日志，否则只输出 info 级别日志'
 local_hosts = '127.0.0.1',  # type: Tuple[str, ...]
 '本地客户端 ip'
+max_cache_size = 2000  # type: int
+'lru_cache 的 max_size'
 
 # **********************************************************************************************************************
 
@@ -452,14 +454,14 @@ class MagicAndLimit:
                 finally:
                     sleep(interval)
 
-    def rq(self, method: str, url: str, timeout: Union[int, float] = 10, retries: int = 5, **kw) \
+    def rq(self, url: str, method: str = 'get', timeout: Union[int, float] = 10, retries: int = 5, **kw) \
             -> Union[Response, None]:
         """网页请求"""
         if self.local_clients and any(local_client.tc_limited for local_client in self.local_clients):
             # 限速爬不动
             raise Exception('Waiting for release tc limit')
 
-        for i in range(retries):
+        for i in range(retries + 1):
             try:
                 html = request(method, url=url, **self.request_args, timeout=timeout, **kw)
                 code = html.status_code
@@ -493,7 +495,7 @@ class MagicAndLimit:
         _info: List[Dict] = []  # 用来存放客户端已有种子信息
 
         # ********** 第一步，下载网页分析
-        page = self.rq('get', f'https://u2.dmhy.org/getusertorrentlistajax.php?userid={uid}&type=leeching').text
+        page = self.rq(f'https://u2.dmhy.org/getusertorrentlistajax.php?userid={uid}&type=leeching').text
         table = BeautifulSoup(page.replace('\n', ''), 'lxml').table
         if table:
             for tr in table.contents[1:]:
@@ -524,7 +526,7 @@ class MagicAndLimit:
                     # ********** 第三步，已有信息查不到 hash，获取种子详细页
                     # 这一步是将种子 tid 与 _id 联系起来的入口
                     if '_id' not in torrent:
-                        detail_page = self.rq('get', f'https://u2.dmhy.org/details.php?id={tid}&hit=1').text
+                        detail_page = self.rq(f'https://u2.dmhy.org/details.php?id={tid}&hit=1').text
                         soup1 = BeautifulSoup(detail_page.replace('\n', ''), 'lxml')
                         torrent['tz'] = self.get_tz(soup1)
                         table1 = soup1.find('table', {'width': '90%'})
@@ -644,6 +646,7 @@ class MagicAndLimit:
         return torrents
 
     @staticmethod
+    @lru_cache(maxsize=max_cache_size)
     def get_pro(tr: Tag) -> List[Union[int, float]]:
         """
         tr: 兼容三种 tr: 种子页每行 tr，下载页每行 tr，详情页显示优惠信息的行 tr
@@ -687,9 +690,9 @@ class MagicAndLimit:
         os.rename(f'{data_path}.bak', data_path)
 
     @staticmethod
-    def byte(st: str, flag: int) -> int:
-        """
-        将表示体积的字符串转换为字节，考虑四舍五入
+    @lru_cache(maxsize=max_cache_size)
+    def byte(st: str, flag: int = 0) -> int:
+        """将表示体积的字符串转换为字节，考虑四舍五入
         网站显示的的数据都是四舍五入保留三位小数
         """
         [num, unit] = st.split(' ')
@@ -700,11 +703,16 @@ class MagicAndLimit:
         flag = 0 if flag == 0 else flag / abs(flag)
         return int((float(num.replace(',', '.')) + 0.0005 * flag) * 1024 ** _pow)
 
+    @staticmethod
+    @lru_cache(maxsize=max_cache_size)
+    def ts(date: str, tz: str):
+        dt = datetime.strptime(date, '%Y-%m-%d %H:%M:%S')
+        return pytz.timezone(tz).localize(dt).timestamp()
+
     @property
     def deta(self) -> int:
-        """种子发布时间与当前的时间差"""
-        dt = datetime.strptime(self.to['date'], '%Y-%m-%d %H:%M:%S')
-        return int(time() - pytz.timezone(self.to['tz']).localize(dt).timestamp())
+        """返回种子发布时间与当前的时间差"""
+        return int(time() - self.ts(self.to['date'], self.to['tz']))
 
     @staticmethod
     def get_tz(soup: Tag) -> str:
@@ -759,7 +767,7 @@ class MagicAndLimit:
                 if 'total_done' in self.to:
                     progress = self.to['total_done'] / self.to['total_size']
                 else:
-                    progress = self.byte(self.to['downloaded'], 0) / self.byte(self.to['size'], 0)
+                    progress = self.byte(self.to['downloaded']) / self.byte(self.to['size'])
                 progress = 1 if progress > 1 else 0.01 if progress < 0.01 else progress
                 hours = int((1 - progress) / progress * seed_time / 3600) + 1
                 hours = min(max(hours, 24), 360)
@@ -844,7 +852,7 @@ class MagicAndLimit:
             if 'total_size' in self.to:
                 if self.to['total_size'] < rule['min_size']:
                     return "check for 'min_size' failed"
-            elif self.byte(self.to['size'], 0) < rule['min_size']:
+            elif self.byte(self.to['size']) < rule['min_size']:
                 return "check for 'min_size' failed"
             del rule['min_size']
 
@@ -852,7 +860,7 @@ class MagicAndLimit:
             if 'total_size' in self.to:
                 if self.to['total_size'] > rule['max_size']:
                     return "check for 'max_size' failed"
-            elif self.byte(self.to['size'], 0) > rule['max_size']:
+            elif self.byte(self.to['size']) > rule['max_size']:
                 return "check for 'max_size' failed"
             del rule['max_size']
 
@@ -870,7 +878,7 @@ class MagicAndLimit:
             if 'total_uploaded' in self.to:
                 if self.to['total_uploaded'] < rule['min_uploaded']:
                     return "check for 'min_uploaded' failed"
-            elif self.byte(self.to['uploaded'], 0) < rule['min_uploaded']:
+            elif self.byte(self.to['uploaded']) < rule['min_uploaded']:
                 return "check for 'min_uploaded' failed"
             del rule['min_uploaded']
 
@@ -878,7 +886,7 @@ class MagicAndLimit:
             if 'total_done' in self.to:
                 if self.to['total_done'] < rule['min_downloaded']:
                     return "check for 'min_downloaded' failed"
-            elif self.byte(self.to['downloaded'], 0) < rule['min_downloaded']:
+            elif self.byte(self.to['downloaded']) < rule['min_downloaded']:
                 return "check for 'min_downloaded' failed"
             del rule['min_downloaded']
 
@@ -913,11 +921,11 @@ class MagicAndLimit:
         urr = rule['ur'] - self.to['promotion'][0]
         if 'total_uploaded' in self.to:
             e_up = self.to['total_uploaded'] / (self.to['total_done'] + 1024) * self.to['total_size']
-            e_add = (e_up - self.byte(self.to.get('true_uploaded') or self.to['uploaded'], 0)) * urr
+            e_add = (e_up - self.byte(self.to.get('true_uploaded') or self.to['uploaded'])) * urr
         else:
-            uploaded = self.byte(self.to.get('true_uploaded') or self.to['uploaded'], 0)
-            downloaded = self.byte(self.to.get('true_downloaded') or self.to['downloaded'], 0)
-            size = self.byte(self.to['size'], 0)
+            uploaded = self.byte(self.to.get('true_uploaded') or self.to['uploaded'])
+            downloaded = self.byte(self.to.get('true_downloaded') or self.to['downloaded'])
+            size = self.byte(self.to['size'])
             if downloaded < 1024 ** 2:
                 e_add = default_ratio * size * urr
             else:
@@ -929,23 +937,32 @@ class MagicAndLimit:
         if 'total_size' in self.to:
             size = self.to['total_size']
         else:
-            size = self.byte(self.to['size'], 0)
-        return (size - self.byte(self.to.get('true_downloaded') or self.to['downloaded'], 0)) * (1 - rule['dr'])
+            size = self.byte(self.to['size'])
+        return (size - self.byte(self.to.get('true_downloaded') or self.to['downloaded'])) * (1 - rule['dr'])
 
     def expected_cost(self, rule: Dict[str, Any]) -> float:
         """估计 uc 消耗量"""
-        c = self.coefficient
-        m = {'SELF': 350, 'OTHER': 500, 'ALL': 1200}[rule['user']]
-        if 'total_size' in self.to:
-            s = self.to['total_size'] // 1024 ** 3 + 1
-        else:
-            [num, unit] = self.to['size'].split(' ')
-            s = 1 if unit in ['MiB', '喵', 'MiБ'] else (
-                    int(float(num) * 1024 if unit in ['TiB', '烫', 'TiБ'] else float(num)) + 1)
         ttl = self.deta / 2592000
         ttl = 1 if ttl < 1 else ttl
-        ur, dr = float(rule['ur']), float(rule['dr'])
         h = float(rule.get('hours') or default_hours)
+        return self.cal_cost(
+            self.coefficient, float(rule['ur']), float(rule['dr']), rule['user'].upper(), int(rule['hours']),
+            ttl, self.to.get('size'), self.to.get('total_size')
+        )
+
+    @staticmethod
+    @lru_cache(maxsize=max_cache_size)
+    def cal_cost(c: float, ur: float, dr: float, user: str, h: int,
+                 ttl: Union[int, float], size=None, total_size: int = None) -> float:
+        m = {'SELF': 350, 'OTHER': 500, 'ALL': 1200}[user]
+        if total_size:
+            s = total_size // 1024 ** 3 + 1
+        else:
+            [num, unit] = size.split(' ')
+            s = 1 if unit in ['MiB', '喵', 'MiБ'] else (
+                    int(float(num) * 1024 if unit in ['TiB', '烫', 'TiБ'] else float(num)) + 1
+            )
+
         e_cost = m * c * pow(s, 0.5) * (pow(2 * ur - 2, 1.5) + pow(2 - 2 * dr, 2)) * pow(ttl, -0.8) * pow(h, 0.5)
         return e_cost
 
@@ -957,7 +974,7 @@ class MagicAndLimit:
             return True
         if 'total_size' not in self.to:
             if 'in_client' not in self.to and self.is_new:
-                if self.deta > self.byte(self.to['size'], 0) / 55 / 1024 ** 2:
+                if self.deta > self.byte(self.to['size']) / 55 / 1024 ** 2:
                     return True
                 return
             if self.to['seeder_num'] > 0:
@@ -1036,7 +1053,7 @@ class MagicAndLimit:
         if 'last_get_time' in self.to and time() - self.to['last_get_time'] < 0.01 or not self.is_new:
             return
         try:
-            page = self.rq('get', f'https://u2.dmhy.org/details.php?id={self.to["tid"]}&hit=1').text
+            page = self.rq(f'https://u2.dmhy.org/details.php?id={self.to["tid"]}&hit=1').text
             soup = BeautifulSoup(page.replace('\n', ''), 'lxml')
             table = soup.find('table', {'width': '90%'})
             if table:
@@ -1108,10 +1125,10 @@ class MagicAndLimit:
             data = {'action': 'magic', 'divergence': '', 'base_everyone': '', 'base_self': '', 'base_other': '',
                     'torrent': tid, 'tsize': '', 'ttl': '', 'user_other': '', 'start': 0, 'promotion': 8, 'comment': ''}
             data.update(_data)
-            response = self.rq('post', 'https://u2.dmhy.org/promotion.php?test=1', data=data).json()
+            response = self.rq('https://u2.dmhy.org/promotion.php?test=1', method='post', data=data).json()
             if response['status'] == 'operational':
                 uc = int(float(BeautifulSoup(response['price'], 'lxml').span['title'].replace(',', '')))
-                _post = self.rq('post', 'https://u2.dmhy.org/promotion.php', retries=1, data=data)
+                _post = self.rq('https://u2.dmhy.org/promotion.php', method='post', retries=0, data=data)
                 if _post.status_code == 200:
                     self.magic_info.append({**_data, **{'tid': tid, 'ts': int(time()), 'uc': uc}})
                     self.save_data()
@@ -1198,11 +1215,15 @@ class MagicAndLimit:
                     try:
                         self.update_tid()
                         self.update_upload()
+                        self.to['ex'] = True
                         continue
                     except:
                         pass
-                else:
-                    self.print(f"Will not limit speed of {self.to['_id']}")
+                continue
+            if self.to['upload_payload_rate'] > 52428800:
+                self.to['ex'] = True
+
+            if not self.to.get('ex'):
                 continue
 
             if 'date' not in self.to:  # 按理说是不会有这种情况的
