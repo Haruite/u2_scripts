@@ -33,18 +33,15 @@
 暂时没有大的问题
 """
 
-
 import os
 import sys
-import yaml
 import subprocess
 import paramiko
 import pytz
 
 from functools import reduce
-from copy import deepcopy
 from datetime import datetime
-from collections import deque
+from collections import deque, UserList
 from time import time, sleep
 from typing import List, Dict, Tuple, Union, Any
 from requests import request, Response, ReadTimeout
@@ -55,335 +52,168 @@ from func_timeout import func_set_timeout, FunctionTimedOut
 from deluge_client import LocalDelugeRPCClient, FailedToReconnectException
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-config = '''
-uid:    
-# uid 必填，可以是自己的或者别人的
 
-proxies:  
-# 代理
-    # http: http://127.0.0.1:10809
-    # https: http://127.0.0.1:10809
+# ***********************************************必填配置，不填不能运行*****************************************************
+uid = 50096  # type: Union[int, str]
+'获取下载种子列表的用户 id'
+cookies = {'nexusphp_u2': ''}  # type: Dict[str, str]
+'网站cookie'
 
-headers:  
-# http 请求头
-    cookie: nexusphp_u2=  
-    # cookie 必填，注意等号两边不能有空格
+# *************************************************重要配置，核心配置******************************************************
+proxies = {'http': '', 'https': ''}  # type: Union[None, Dict[str, str]]
+'网络代理'
+magic = True  # type: Any
+'魔法的总开关，为真不施加任何魔法，否则至少会给旧种施加魔法'
+magic_new = True  # type: Any
+'只有为真才会给新种施加魔法'
+limit = True  # type: Any
+'是否开启限速'
+clients_info = ({'type': 'deluge',  # 客户端类型，目前只支持 deluge
+                 'host': '127.0.0.1',  # 主机 ip 地址
+                 'port': 58846,  # daemon 端口
+                 'username': '',  # 本地一般不用填用户名和密码，查找路径是 ~/.config/deluge/auth
+                 'password': '',
+                 'connect_interval': 1.5,  # 从客户端读取种子状态的时间间隔
+                 'min_announce_interval': 300  # 默认值 300，如果安装了 ltconfig 会读取设置并以 ltconfig 为准
+                 },
+                )  # type: Tuple[Dict[str, Union[str, int, float]], ...]
+'客户端配置'
+enable_clients = False  # type: Any
+'客户端配置是否生效'
+tc_info = ({'host': '127.0.0.1',  # 主机 ip 地址
+            'root_pass': '',  # root 密码，用于远程执行命令，本地不需要，但是要用 root 权限运行
+            'device': '',  # 网卡名
+            'timeout': 30,  # 客户端响应超时秒数，超时后就进行网卡限速
+            'initial_rate': 100,  # 初始限速值 (Mbps)，尽量一步到位
+            'min_rate': 10,  # 最低限速值 (Mbps)，不要太低,会导致机器失联
+            },
+           )  # type: Tuple[Dict[str, Union[str, int, float]], ...]
+'网卡限速配置，客户端失联后进行操作，主要针对 deluge1.3 + 机械硬盘 + 10G 带宽 ，10G 以下带宽不推荐使用，谨慎填写信息'
+enable_tc = False  # type: Any
+'限速配置是否生效'
 
-    user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4814.0 Safari/537.36 Edg/99.0.1135.6
+# *****************************************************详细配置**********************************************************
+interval = 60  # type: Union[int, float]
+'获取下载页面的时间间隔，magic为真时就会按这个间隔爬下载页面'
+auto_mode = False  # type: Any
+'如果为真，新种放魔法自动切换魔法规则(请仔细检查魔法规则，已有配置会消耗巨量uc)'
+default_mode = 3  # type: int
+'如果 auto_mode 不为真，则此项为新种的魔法规则，这个数字，就是 modes 列表的序号(第一个为 0)'
+default_hours = 24  # type: int
+'如果魔法规则没有指定魔法时长，则默认魔法为此时长'
+min_tid = 47586  # type: int
+'''种子 id 超过这个值纳入新种的判断范围
+这个参数存在的原因在于，下载种子页没有提供种子的发布时间信息，下载人数也没法判断(刚加入的时候可能下载数为0)
+但我又不想每个种子都去查详情页(想象一下同时下载 1000 个种子)，所以决定将tid大于一定数值才去判断'''
+min_leecher_num = 5  # type: int
+'种子下载人数（网页显示的数值）超过这个值纳入新种的判断范围'
+min_leecher_to_seeder_ratio = 0.1  # type: Union[int, float]
+'''只有当
+下载人数 / (做种人数 + 1) 
+超过这个值才可能是新种，如果这个值比较大，则新种只包括未出种的种子'''
+uc_24_max = 6000000  # type: int
+'24h 内 uc 消耗量超过这个值，则不放魔法'
+uc_72_max = 12000000  # type: int
+'72h 内 uc 消耗量超过这个值，则不放魔法'
+default_ratio = 3
+'种子默认分享率，用于魔法规则估计上传量'
+min_secs_before_announce = 20  # type: Union[int, float]
+'''这个值是检查放魔法的时间用的，给自己放魔法的话，在距离汇报时间小于 20s 的时候'''
+modes = [{'uc_limit': {'24_max': 1500000, '72_max': 4300000, '24_min': 0, '72_min': 0},
+          'rules': [{'ur': 2.33, 'dr': 1, 'user': 'ALL', 'min_size': 16146493595, 'max_size': 107374182400, 'min_uploaded': 1073741824, 'ur_less_than': 2},
+                    {'ur': 2.33, 'dr': 1, 'user': 'SELF', 'min_uploaded': 1073741824, 'min_upload_added': 57123065037, 'max_uc_peer_gb_added': 771},
+                    {'ur': 1, 'dr': 0, 'user': 'ALL'}
+                    ]
+          },
+         {'uc_limit': {'24_max': 2200000, '72_max': 5600000, '24_min': 1400000, '72_min': 4100000},
+          'rules': [{'ur': 2.33, 'dr': 1, 'user': 'SELF', 'min_uploaded': 1073741824, 'min_upload_added': 57123065037, 'max_uc_peer_gb_added': 771},
+                    {'ur': 1, 'dr': 0, 'user': 'ALL'}
+                    ]
+          },
+         {'uc_limit': {'24_max': 3000000, '72_max': 7500000, '24_min': 2050000, '72_min': 5300000},
+          'rules': [{'ur': 2.33, 'dr': 1, 'user': 'SELF', 'min_uploaded': 5368709120, 'min_upload_added': 85684597555, 'max_uc_peer_gb_added': 545},
+                    {'ur': 1, 'dr': 0, 'user': 'ALL', 'min_size': 16146493595, 'max_size': 214748364800},
+                    {'ur': 1, 'dr': 0, 'user': 'SELF'}
+                    ]
+          },
+         {'uc_limit': {'24_max': 4500000, '72_max': 10000000, '24_min': 2900000, '72_min': 7000000},
+          'rules': [{'ur': 2.33, 'dr': 1, 'user': 'SELF', 'min_uploaded': 16106127360, 'min_upload_added': 214211493888, 'max_uc_peer_gb_added': 545},
+                    {'ur': 1, 'dr': 0, 'user': 'SELF'}
+                    ]
+          },
+         {'uc_limit': {'24_max': 6000000, '72_max': 12000000, '24_min': 4200000, '72_min': 9400000},
+          'rules': [{'ur': 1, 'dr': 0, 'user': 'SELF', 'min_download_reduced': 5368709120, 'max_uc_peer_gb_reduced': 4727}]
+          }
+         ]  # type: List[Dict[str, Union[Dict[str, Union[int, float]], List[Dict[str, Union[int, float, str]]]]]]
+'''这是新种的魔法规则，这下面的子项我称之为”模式“，可以配置任意套模式，程序中用 mode 表示(其实是用序号代替这个模式)
+每个子项包含 uc_limit 和 rules 两项
 
-magic:
-    enable: True  
-    # 魔法的总开关，为 False 不施加任何魔法，为 True 则至少会给旧种施加魔法
-
-    magic_new: False  
-    # 只有为 True 才会给新种施加魔法
-
-    interval: 180  
-    # 获取下载页面的时间间隔，魔法一旦开启就会按这个间隔爬下载页面
-
-    auto_mode: False  
-    # 如果为真，新种放魔法自动切换魔法规则（请仔细检查魔法规则，已有配置会消耗巨量 uc）
-
-    default_mode: 0  
-    # 如果 auto_mode 不为真，则此项为新种的魔法规则，这个数字，就是 modes 列表的序号（第一个为 0）
-
-    default_hours: 24  
-    # 如果魔法规则没有指定魔法时长，则默认魔法为此时长
-
-    min_tid: 49412  
-    # 种子 id 超过这个值纳入新种的判断范围
-    # 这个参数存在的原因在于，下载种子页没有提供种子的发布时间信息，下载人数也没法判断（刚加入的时候可能下载数为 0）
-    # 但我又不想每个种子都去查详情页（想象一下同时下载 1000 个种子），所以决定将 tid 大于一定数值才去判断
-
-    min_leecher_num: 5  
-    # 种子下载人数（网页显示的数值）超过这个值纳入新种的判断范围
-
-    min_leecher_to_seeder_ratio: 0.1  
-    # 只有 下载人数 / (做种人数+1) 超过这个值才可能是新种，如果这个值比较大，则新种只包括未出种的种子
-
-    uc_24_max: 6000000  
-    # 24h 内 uc 消耗量超过这个值，则不放魔法
-
-    uc_72_max: 12000000  
-    # 72h 内 uc 消耗量超过这个值，则不放魔法
-
-    default_ratio: 3  
-    # 种子默认分享率，用于魔法规则估计上传量
-
-    min_connect_times_before_announce: 13  
-    # 这个值是检查放魔法的时间用的，比如说客户端连接时间 5s，
-    # 给自己放魔法的话，在距离汇报时间小于 3.6 × 5s 的时候
-
-    modes:  
-    # 这是新种的魔法规则，这下面的子项我称之为”模式“，可以配置任意套模式，程序中用 mode 表示（其实是用序号代替这个模式）
-        -
-            uc_limit:  
-            # uc 使用限制，四个参数都要填
-            # 如果 24h uc 使用量超过 24_max 或者 72h uc 使用量超过 72_max，则 mode +1
-            # 如果最后一级还是超过 24_max 或者 72h uc，则新种不放魔法
-            # 如果 24h uc 使用量小于 24_max 且 72h uc 使用量小于 72_max 且 mode > 0，则 mode -1
-            # 注意对于相邻的两级，高一级的 24_min 要不大于于低一级的 24_max，且高一级的 72_min 要不大于于低一级的 72_max
-            # 否则在程序计算 mode 时可能会陷入死循环
-
-                24_max: 1500000
-                72_max: 4300000
-                24_min: 0
-                72_min: 0
-
-            rules:
-            # 规则可以配置任意条，如果检查规则通过，则可以生成一个魔法
-            # 如果上传下载比率都不为 1 则会拆成一个上传和一个下载魔法（uc 使用量不受影响）
-            # 每次只选择一个上传魔法和一个下载魔法
-            # 具体优先级是，首先优先选择范围为所有人魔法，然后优先选择上传比率更高或者下载比率更低的魔法，最后优先选择时效最长的魔法
-
-                -
-                # 首先必须有 ur（上传比率）、dr（下载比率）、user（有效用户）
-                # hours 为时长，24~360 之间的整数，可以不写，会采用 default_hours
-                # ur 可选的值：1.3~2.33 或 1，ur 可选的值：0~0.8 或 1，两者不能同时为 1
-                # user：给自己放填 SELF，所有人放填 ALL，给另一个人放填 OTHER
-                # 如果要给另一个人放魔法，最好另外开一个脚本
-                # 另外也可以加上 comment
-                # 其它一些键为程序制定的检查项，具体见 MagicAndLimit 类的 check_rule 函数
-                # 如果没有其他选项，则不进行任何检查，对所有种子都施加这个魔法
-
-                    ur: 2.33
-                    dr: 1
-                    user: ALL
-                    min_size: 16146493595
-                    max_size: 107374182400
-                    min_uploaded: 1073741824
-                    ur_less_than: 2   
-                -
-                    ur: 2.33
-                    dr: 1
-                    user: SELF
-                    min_uploaded: 1073741824
-                    min_upload_added: 57123065037
-                    max_uc_peer_gb_added: 771
-                -
-                    ur: 1
-                    dr: 0
-                    user: ALL                 
-        -
-            uc_limit:
-                24_max: 2200000
-                72_max: 5600000
-                24_min: 1400000
-                72_min: 4100000
-            rules:  
-                -
-                    ur: 2.33
-                    dr: 1
-                    user: SELF
-                    min_uploaded: 1073741824
-                    min_upload_added: 57123065037
-                    max_uc_peer_gb_added: 771
-                -
-                    ur: 1
-                    dr: 0
-                    user: ALL                     
-        -
-            uc_limit:
-                24_max: 3000000
-                72_max: 7500000
-                24_min: 2050000
-                72_min: 5300000
-            rules:
-                -
-                    ur: 2.33
-                    dr: 1
-                    user: SELF
-                    min_uploaded: 5368709120
-                    min_upload_added: 85684597555
-                    max_uc_peer_gb_added: 545
-                -
-                    ur: 1
-                    dr: 0
-                    user: ALL 
-                    min_size: 16146493595
-                    max_size: 214748364800
-                -
-                    ur: 1
-                    dr: 0
-                    user: SELF 
-        -
-            uc_limit:
-                24_max: 4500000
-                72_max: 10000000
-                24_min: 2900000
-                72_min: 7000000
-            rules:
-                -
-                    ur: 2.33
-                    dr: 1
-                    user: SELF
-                    min_uploaded: 16106127360
-                    min_upload_added: 214211493888
-                    max_uc_peer_gb_added: 545
-                -
-                    ur: 1
-                    dr: 0
-                    user: SELF 
-        -
-            uc_limit:
-                24_max: 6000000
-                72_max: 12000000
-                24_min: 4200000
-                72_min: 9400000
-            rules:
-                -
-                    ur: 1
-                    dr: 0
-                    user: SELF 
-                    min_download_reduced: 5368709120
-                    max_uc_peer_gb_reduced: 4727
-
-enable_clients: False  
-# 为了防止有人不会删，加上这个好了，如果有下载客户端配置完记得改为 True
-
-clients:  
-    # 可以配置任意个下载客户端，也可以不配置
-
-    - 
-        type: de  
-        # 目前只支持 de
-
-        host: 127.0.0.1
-        # IP
-
-        port: 58846  
-        # deamon 端口
-
-        username:   
-        # 用户名，本地客户端不用填
-
-        password:   
-        # 密码，本地客户端不用填
-
-        connect_interval: 1.5  
-        # 读取客户端状态的间隔，根据经验设为 5s 一般加入种子 8s 内可以放完魔法（如果马上就要放的话）
-
-        min_announce_interval: 300  
-        # libtorrent 默认值是 300
-
-        tc:  
-        # 失联时对网卡限速，10G 以下带宽不推荐使用，谨慎填写信息
-        
-            enable: False
-            # 是否开启
-
-            device: eno1
-            # 网卡名
-
-            initial_rate: 100
-            # 初始限速值(Mbps)，尽量一步到位
-
-            min_rate: 10
-            # 最低限速值(Mbps)，不要太低，会导致机器失联
-
-            timeout: 30
-            # deluge 响应超时(s)
-
-            root_pass: 
-            # root 密码，用于远程执行命令，本地不需要，但是要用 root 权限运行
-
-limit:  
-# 懒得配置参数了，要调节自己改代码
-
-    enable: True  
-    # 是否开启限速处理
-    
-    variable_announce_interval: False
-    # 开启后会尝试调节完成前最后一次汇报时间
-
-log_path:  
-# 日志路径（完整文件名），不填则使用默认值
-
-data_path:  
-# 程序数据保存路径（完整文件名），不填则使用默认值
-
-enable_debug_output: True
-# 为真时会输出 debug 信息
+:uc_limit:
+    uc 使用限制，一个字典，包含 24_max/72_max/24_min/72_min 四个键
+    如果 24h uc 使用量超过 24_max 或者 72h uc 使用量超过 72_max，则 mode + 1
+    如果最后一级还是超过 24_max 或者 72h uc，则新种不放魔法
+    如果 24h uc 使用量小于 24_max 且 72h uc 使用量小于 72_max 且 mode > 0，则 mode -1
+    注意对于相邻的两级，高一级的 24_min 要不大于于低一级的 24_max，且高一级的 72_min 要不大于于低一级的 72_max
+:rules:
+    一个列表或者元组，每项为一个字典对应一条魔法规则，规则可以配置任意条，如果检查规则通过，则可以生成一个魔法
+    如果上传下载比率都不为 1 则会拆成一个上传和一个下载魔法(uc 使用量不受影响)
+    每次只选择一个上传魔法和一个下载魔法
+    具体优先级是，首先优先选择范围为所有人魔法，然后优先选择上传比率更高或者下载比率更低的魔法，最后优先选择时效最长的魔法
+        对于每一条规则，首先必须有 ur(上传比率)、dr(下载比率)、user(有效用户)
+        hours 为时长，24~360 之间的整数，可以不写，会采用 default_hours
+        ur 可选的值：1.3~2.33或1，ur可选的值：0~0.8或1，两者不能同时为1
+        user：给自己放填 SELF，所有人放填 ALL，给另一个人放填 OTHER
+        如果要给另一个人放魔法，最好另外开一个脚本，另外也可以加上 comment
+        其它一些键为程序制定的检查项，具体见 MagicAndLimit 类的 check_rule 函数
+        如果没有其他选项，则不进行任何检查，对所有种子都施加这个魔法
 '''
+variable_announce_interval = True
+'开启后会尝试调节完成前最后一次汇报时间'
 
-conf = yaml.load(config, yaml.FullLoader)
+# ****************************************************可调节配置**********************************************************
+log_path = f'{os.path.splitext(__file__)[0]}.log'  # type: str
+'日志文件路径'
+data_path = f'{os.path.splitext(__file__)[0]}.data.txt'  # type: str
+'程序保存数据路径'
+enable_debug_output = True  # type: Any
+'为真时会输出 debug 级别日志，否则只输出 info 级别日志'
+local_hosts = '127.0.0.1',  # type: Tuple[str, ...]
+'本地客户端 ip'
 
-
-class ConfigError(Exception):
-    pass
-
-
-class BtClient(metaclass=ABCMeta):  # 这个基类规定了 BT 客户端必须实现的功能
-
-    @abstractmethod
-    def call(self, method, *args, **kwargs):
-        pass
-
-    @abstractmethod
-    def set_upload_limit(self, _id: str, rate: int):
-        pass
-
-    @abstractmethod
-    def set_download_limit(self, _id: str, rate: int):
-        pass
-
-    @abstractmethod
-    def reannounce(self, _id):
-        pass
-
-    @abstractmethod
-    def downloading_torrents_info(self, keys: list):
-        pass
-
-    @abstractmethod
-    def torrent_status(self, _id: str, keys: list):
-        pass
+# **********************************************************************************************************************
 
 
-class Deluge(LocalDelugeRPCClient, BtClient):  # 主要是把 call 重写了一下，因为 deluge 太容易失联了
-    timeout = 10
+class BTClient(metaclass=ABCMeta):
+    """BT 客户端基类"""
+    local_clients = []
 
-    def __init__(self,
-                 host: str = '127.0.0.1',
-                 port: int = 58846,
-                 username: str = '',
-                 password: str = '',
-                 decode_utf8: bool = True,
-                 automatic_reconnect: bool = True,
-                 min_announce_interval: int = 300,
-                 connect_interval: int = 5,
-                 tc: dict = None
-                 ):
-        super(Deluge, self).__init__(host, port, username, password, decode_utf8, automatic_reconnect)
+    def __init__(self, host, min_announce_interval, connect_interval):
+        self.host = host
         self.min_announce_interval = min_announce_interval
         self.connect_interval = connect_interval
-        self.enable_tc = tc['enable']
+        self.enable_tc = False
         self.io_busy = False
         self.tc_limited = False
-        self.device = tc['device']
-        self.op_timeout = tc['timeout']
-        self.initial_rate = tc['initial_rate']
-        self.tc_rate = self.initial_rate
-        self.min_rate = tc['min_rate']
-        self.passwd = tc['root_pass']
-        self.ssh_hd = paramiko.SSHClient()
-        self.ssh_hd.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        if self.enable_tc:
-            self.run_cmd(f'tc qdisc del dev {self.device} root >> /dev/null 2>&1')
+        for info in tc_info:
+            if info['host'] == self.host and enable_tc:
+                self.enable_tc = True
+                self.device = info['device']
+                self.op_timeout = info['timeout']
+                self.initial_rate = info['initial_rate']
+                self.tc_rate = self.initial_rate
+                self.min_rate = info['min_rate']
+                self.passwd = info['root_pass']
+                self.sshd = paramiko.SSHClient()
+                self.sshd.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                self.run_cmd(f'tc qdisc del dev {self.device} root >> /dev/null 2>&1')
 
-    def log_filter(self, record):  # 失联的时候，硬盘非常繁忙，不要写 log，会消耗大量时间
-        return 1 - self.io_busy
+        if host in local_hosts:
+            self.local_clients.append(self)
 
-    def call_retry(self, method, *args, **kwargs):
-        if not self.connected and method != 'daemon.login':
-            for i in range(5):
-                try:
-                    self.reconnect()
-                    logger.info(f'Connected to deluge client on {self.host}')
-                    break
-                except:
-                    sleep(0.3 * 2 ** i)
-        return super(Deluge, self).call(method, *args, **kwargs)
+    @classmethod
+    def log_filter(cls, record):
+        """客户端失联的时候，硬盘非常繁忙，不写入 log 文件"""
+        return all(1 - local_client.io_busy for local_client in cls.local_clients)
 
     def call(self, method, *args, **kwargs):
         try:
@@ -398,12 +228,8 @@ class Deluge(LocalDelugeRPCClient, BtClient):  # 主要是把 call 重写了一�
             else:
                 return self.call_retry(method, *args, **kwargs)
         except BaseException as e:
-            if isinstance(e, FailedToReconnectException):
-                logger.error(f'Failed to reconnect to deluge client! Host  -------  {self.host}')
-            elif isinstance(e, TimeoutError):
+            if isinstance(e, TimeoutError):
                 logger.error(f'{e.__class__.__name__}: {e}')
-            elif e.__class__.__name__ == 'BadLoginError':
-                logger.error(f'Failed to connect to deluge client on {self.host}, Password does not match')
             elif not self.enable_tc:
                 raise
             if self.enable_tc:
@@ -426,8 +252,7 @@ class Deluge(LocalDelugeRPCClient, BtClient):  # 主要是把 call 重写了一�
                     logger.warning(f'Set the upload limit for {self.device} on {self.host} to {self.tc_rate:.2f}mbps')
                     self.tc_rate = self.tc_rate / 2
                 try:
-                    self.reconnect()
-                    res = super(Deluge, self).call(method, *args, **kwargs)
+                    res = self.call(method, *args, **kwargs)
                     self.io_busy = False
                     return res
                 except:
@@ -436,11 +261,77 @@ class Deluge(LocalDelugeRPCClient, BtClient):  # 主要是把 call 重写了一�
                 logger.exception(e)
 
     def run_cmd(self, cmd):
-        if self.host == '127.0.0.1':
+        if self.host in local_hosts:
             subprocess.Popen(cmd, shell=True)
         else:
-            self.ssh_hd.connect(hostname=self.host, username='root', password=self.passwd)
-            self.ssh_hd.exec_command(cmd)
+            self.sshd.connect(hostname=self.host, username='root', password=self.passwd)
+            self.sshd.exec_command(cmd)
+
+    @abstractmethod
+    def call_retry(self, method, *args, **kwargs):
+        """客户端连接失败后重连"""
+
+    @abstractmethod
+    def set_upload_limit(self, _id: str, rate: int):
+        """设置上传限速"""
+
+    @abstractmethod
+    def set_download_limit(self, _id: str, rate: int):
+        """设置下载限速"""
+
+    @abstractmethod
+    def re_announce(self, _id):
+        """强制重新汇报"""
+
+    @abstractmethod
+    def downloading_torrents_info(self, keys: list) -> Dict[str, Dict[str, Any]]:
+        """下载中的种子信息"""
+
+    @abstractmethod
+    def torrent_status(self, _id: str, keys: list) -> Dict[str, Any]:
+        """单个种子信息"""
+
+
+class Deluge(BTClient, LocalDelugeRPCClient):  # 主要是把 call 重写了一下，因为 deluge 太容易失联了
+    timeout = 10
+
+    def __init__(self,
+                 host: str = '127.0.0.1',
+                 port: int = 58846,
+                 username: str = '',
+                 password: str = '',
+                 decode_utf8: bool = True,
+                 automatic_reconnect: bool = True,
+                 min_announce_interval: int = 300,
+                 connect_interval: int = 1.5
+                 ):
+        super(Deluge, self).__init__(host, min_announce_interval, connect_interval)
+        super(BTClient, self).__init__(host, port, username, password, decode_utf8, automatic_reconnect)
+
+        try:
+            min_announce_interval = self.ltconfig.get_settings()['min_announce_interval']
+            if self.min_announce_interval != min_announce_interval:
+                self.min_announce_interval = min_announce_interval
+                logger.warning(f"Min_announce_interval of deluge client on {self.host} "
+                               f"is {self.min_announce_interval} s")
+        except:
+            pass
+
+    def call_retry(self, method, *args, **kwargs):
+        if not self.connected and method != 'daemon.login':
+            for i in range(1):
+                try:
+                    self.reconnect()
+                    logger.info(f'Connected to deluge client on {self.host}')
+                    break
+                except Exception as e:
+                    if isinstance(e, FailedToReconnectException):
+                        logger.error(f'Failed to reconnect to deluge client! Host  -------  {self.host}')
+                    elif e.__class__.__name__ == 'BadLoginError':
+                        logger.error(f'Failed to connect to deluge client on {self.host}, Password does not match')
+                    else:
+                        sleep(0.3 * 2 ** i)
+        return super(BTClient, self).call(method, *args, **kwargs)
 
     def set_upload_limit(self, _id, rate):
         return self.core.set_torrent_options([_id], {'max_upload_speed': rate})
@@ -448,7 +339,7 @@ class Deluge(LocalDelugeRPCClient, BtClient):  # 主要是把 call 重写了一�
     def set_download_limit(self, _id, rate):
         return self.core.set_torrent_options([_id], {'max_download_speed': rate})
 
-    def reannounce(self, _id):
+    def re_announce(self, _id):
         return self.core.force_reannounce([_id])
 
     def downloading_torrents_info(self, keys):
@@ -458,40 +349,74 @@ class Deluge(LocalDelugeRPCClient, BtClient):  # 主要是把 call 重写了一�
         return self.core.get_torrent_status(_id, keys)
 
 
-"""
-import qbittorrentapi
-class Qbittorrent(qbittorrentapi.Client,BtClient):
-    pass
-"""
+class MagicInfo(UserList):
+    def __init__(self, lst=None):
+        super(MagicInfo, self).__init__(lst)
+        self.update_ts = int(time()) - 1
+        self.uc_24, self.uc_72 = 0, 0
+
+    def total_uc_cost(self) -> Tuple[int, int]:
+        """计算 24h 和 72h uc 使用量之和"""
+        t = int(time())
+        if t >= self.update_ts:
+            self.update_ts = t + 86400 * 15
+            uc_24, uc_72 = 0, 0
+            for info in list(self.data):
+                dt = t - info['ts']
+                if dt < 259200:
+                    uc_72 += info['uc']
+                    if dt < 86400:
+                        uc_24 += info['uc']
+                else:
+                    if info['ts'] + info['hours'] * 3600 < t:
+                        self.data.remove(info)
+                for t0 in 86400, 259200, info['hours'] * 3600:
+                    if t < t0 + info['ts'] < self.update_ts:
+                        self.update_ts = t0 + info['ts']
+            self.uc_24, self.uc_72 = uc_24, uc_72
+        return self.uc_24, self.uc_72
+
+    def append(self, info):
+        self.data.append(info)
+        self.uc_24 += info['uc']
+        self.uc_72 += info['uc']
+        if 86400 + info['ts'] < self.update_ts:
+            self.update_ts = 86400 + info['ts']
 
 
 class MagicAndLimit:
     mode = 0
-    magic_info: List[Dict] = []
+    magic_info = MagicInfo([])
     coefficient = 1.549161
+    torrents_info = {}
+    instances = []
+    local_clients = BTClient.local_clients
+    uc_24, uc_72 = 0, 0
 
-    @classmethod
-    def init(cls):
-        with open(data_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                if line.startswith('mode = '):
-                    cls.mode = eval(line.lstrip('mode = '))
-                if line.startswith('magic_info = '):
-                    cls.magic_info = eval(line.lstrip('magic_info = '))
-                if line.startswith('coefficient = '):
-                    cls.coefficient = eval(line.lstrip('coefficient = '))
+    data_keys = ['mode', 'magic_info', 'coefficient', 'torrents_info']
+    request_args = {'headers': {'user-agent': 'U2-Auto-Magic'},
+                    'cookies': cookies,
+                    'proxies': proxies,
+                    }
+    status_keys = ['download_payload_rate', 'eta', 'max_download_speed', 'max_upload_speed',
+                   'name', 'next_announce', 'num_seeds', 'total_done', 'total_uploaded',
+                   'total_size', 'tracker', 'time_added', 'upload_payload_rate'
+                   ]
+
+    def __new__(cls, *args, **kwargs):
+        instance = super().__new__(cls)
+        cls.instances.append(instance)
+        return instance
 
     def __init__(self, client: Union[Deluge, None]):
         self.client = client
-        self.torrents_info = []
-        self.m_conf = conf['magic']
-        self.l_conf = conf['limit']
+        n = self.instances.index(self)
+        if n not in self.__class__.torrents_info:
+            self.__class__.torrents_info[n] = self.torrents_info = {}
+        else:
+            self.torrents_info = self.__class__.torrents_info[n]
         self.to = {}
         self.last_connect = time()
-        self.request_args = {'headers': conf['headers'], 'proxies': conf['proxies']}
-        self.status_keys = ['download_payload_rate', 'eta', 'max_download_speed', 'max_upload_speed',
-                            'name', 'next_announce', 'num_seeds', 'total_done', 'total_uploaded',
-                            'total_size', 'tracker', 'time_added', 'upload_payload_rate']
         self.clients = []
 
     def run(self):
@@ -499,11 +424,11 @@ class MagicAndLimit:
             while True:
                 try:
                     self.torrents_info = self.get_info_from_client()
-                    if self.m_conf['enable'] or self.l_conf['enable']:
+                    if magic or limit:
                         self.fix_next_announce()
-                    if self.m_conf['enable']:  # 顺序不能颠倒
+                    if magic:  # 顺序不能颠倒
                         self.magic()
-                    if self.l_conf['enable']:
+                    if limit:
                         self.limit_speed()
                 except Exception as e:
                     logger.exception(e)
@@ -512,41 +437,46 @@ class MagicAndLimit:
         else:
             while True:
                 sleep(1)
-                if not any(not c.client.connected for i, c in enumerate(t_client) if i > 0):
+                if all(instance.client.connected for instance in self.instances[1:]):
                     logger.info('All clients connected')
                     sleep(10)
                     break
             while True:
                 try:
-                    if self.m_conf['enable']:
+                    if magic:
                         torrents = self.get_info_from_web()
                         self.torrents_info = self.locate_client(torrents)
                         self.magic()
                 except Exception as e:
                     logger.exception(e)
                 finally:
-                    sleep(self.m_conf['interval'])
+                    sleep(interval)
 
     def rq(self, method: str, url: str, timeout: Union[int, float] = 10, retries: int = 5, **kw) \
-            -> Union[Response, None]:  # 网页请求
-        if local_client and local_client.tc_limited:  # 限速爬不动
+            -> Union[Response, None]:
+        """网页请求"""
+        if self.local_clients and any(local_client.tc_limited for local_client in self.local_clients):
+            # 限速爬不动
             raise Exception('Waiting for release tc limit')
+
         for i in range(retries):
             try:
                 html = request(method, url=url, **self.request_args, timeout=timeout, **kw)
                 code = html.status_code
                 if code < 400:
                     if method == 'get':
-                        if url != f'https://u2.dmhy.org/getusertorrentlistajax.php?userid={conf["uid"]}&type=leeching':
-                            logger.debug(f'Downloaded page: {url}')
+                        if url != f'https://u2.dmhy.org/getusertorrentlistajax.php?userid={uid}&type=leeching':
+                            function = sys._getframe(1).f_code.co_name
+                            line = sys._getframe(1).f_lineno
+                            _logger = logger.patch(lambda record: record.update({'function': function, 'line': line}))
+                            _logger.debug(f'Downloaded page: {url}')
                         else:
                             logger.trace(f'Downloaded page: {url}')
                         if '<title>Access Point :: U2</title>' in html.text or 'Access Denied' in html.text:
                             logger.error('Your cookie is wrong')
                     return html
                 elif i == retries - 1:
-                    raise Exception(f'Failed to request... '
-                                    f'method: {method}, url: {url}, kw: {kw}'
+                    raise Exception(f'Failed to request... method: {method}, url: {url}, kw: {kw}'
                                     f' ------ status code: {code}')
                 elif code in [502, 503]:
                     delay = int(html.headers.get('Retry-After') or '30')
@@ -563,7 +493,7 @@ class MagicAndLimit:
         _info: List[Dict] = []  # 用来存放客户端已有种子信息
 
         # ********** 第一步，下载网页分析
-        page = self.rq('get', f'https://u2.dmhy.org/getusertorrentlistajax.php?userid={conf["uid"]}&type=leeching').text
+        page = self.rq('get', f'https://u2.dmhy.org/getusertorrentlistajax.php?userid={uid}&type=leeching').text
         table = BeautifulSoup(page.replace('\n', ''), 'lxml').table
         if table:
             for tr in table.contents[1:]:
@@ -588,7 +518,7 @@ class MagicAndLimit:
                         torrent.update(_torrent)
                         break
 
-                if tid > self.m_conf['min_tid'] or torrent['leecher_num'] > self.m_conf['min_leecher_num']:
+                if tid > min_tid or torrent['leecher_num'] > min_leecher_num:
                     # 旧种子不需要知道 hash，因为不需要在客户端的线程放魔法
 
                     # ********** 第三步，已有信息查不到 hash，获取种子详细页
@@ -600,7 +530,7 @@ class MagicAndLimit:
                         table1 = soup1.find('table', {'width': '90%'})
                         torrent['date'] = table1.time.attrs.get('title') or table1.time.text
                         for tr1 in table1:
-                            if tr1.td.text in ['种子信息', '種子訊息', 'Torrent Info', 'Информация о торренте',
+                            if tr1.td.text in ['种子信息', '種子訊息', 'Torrent Info', 'Информация о торренте',
                                                'Torrent Info', 'Информация о торренте']:
                                 torrent['_id'] = tr1.tr.contents[-2].contents[1].strip()
 
@@ -617,13 +547,10 @@ class MagicAndLimit:
         [_ids.add(torrent['_id']) for torrent in torrents if '_id' in torrent and 'in_client' not in torrent]
         all_connected = True
 
-        if len(_ids) > 0 and len(t_client) > 1:
+        if len(_ids) > 0 and len(self.instances) > 1:
 
             # 由于可能出现不可预料的延迟，采用线程任务
-            with ThreadPoolExecutor(max_workers=len(t_client) - 1) as executor:
-                """修复 Segmentation fault
-                发现 deepcopy 不能解决问题，单独给第一个线程创建对象算了，如果我的想法是对的那么问题已经解决了
-                如果还是异常退出，可以用 monitor.py，检测到脚本退出后自动运行脚本"""
+            with ThreadPoolExecutor(max_workers=len(self.instances) - 1) as executor:
                 futures = [executor.submit(cl.downloading_torrents_info, self.status_keys) for cl in self.clients]
                 for future in as_completed(futures):
                     try:
@@ -678,7 +605,7 @@ class MagicAndLimit:
                         break
 
                 # ********** 第三步，更新网页获取的种子信息，这一步也是必做，因为要更新上传下载量
-                for _torrent in t_client[0].torrents_info:
+                for _torrent in self.instances[0].torrents_info:
                     if _id == _torrent.get('_id') or data.get('tid') == _torrent['tid']:
                         if '_id' not in _torrent:
                             _torrent['_id'] = _id
@@ -693,9 +620,9 @@ class MagicAndLimit:
                 if 'tid' not in data:
                     if f1 == 0:
                         try:
-                            t_client[0].get_info_from_web()
+                            self.instances[0].get_info_from_web()
                             '''没有用 locate_client，是为了避免多线程同时使用同一个 deluge 对象'''
-                            for to in t_client[0].torrents_info:
+                            for to in self.instances[0].torrents_info:
                                 if to.get('_id') == data['_id']:
                                     to['in_client'] = True
                                     data.update(to)
@@ -710,8 +637,8 @@ class MagicAndLimit:
 
                 torrents.append(data)
 
-        if f1 == 1 and self.m_conf['enable']:
-            t_client[0].magic()
+        if f1 == 1 and magic:
+            self.instances[0].magic()
 
         self.last_connect = time()
         return torrents
@@ -737,10 +664,11 @@ class MagicAndLimit:
         return list(pro.values())
 
     @classmethod
-    def write_info(cls):  # 文件中写入程序数据，最小化程序运行中断带来的影响
+    def save_data(cls):
+        """文件中写入程序数据，最小化程序运行中断带来的影响"""
         with open(data_path, 'r', encoding='utf-8') as f1, \
                 open(f'{data_path}.bak', 'w', encoding='utf-8') as f2:
-            to_info = {i: c.torrents_info for i, c in enumerate(t_client)}
+            to_info = {i: c.torrents_info for i, c in enumerate(cls.instances)}
             syntax_map = {'mode = ': cls.mode,
                           'magic_info = ': cls.magic_info,
                           'coefficient = ': cls.coefficient,
@@ -773,7 +701,8 @@ class MagicAndLimit:
         return int((float(num.replace(',', '.')) + 0.0005 * flag) * 1024 ** _pow)
 
     @property
-    def deta(self) -> int:  # 返回种子发布时间与当前的时间差
+    def deta(self) -> int:
+        """种子发布时间与当前的时间差"""
         dt = datetime.strptime(self.to['date'], '%Y-%m-%d %H:%M:%S')
         return int(time() - pytz.timezone(self.to['tz']).localize(dt).timestamp())
 
@@ -791,13 +720,14 @@ class MagicAndLimit:
                 if self.to.get('in_client'):
                     continue
             if self.is_new:
-                if self.m_conf['magic_new']:
+                if magic_new:
                     self.magic_new()
             else:
                 self.magic_old()
 
     def magic_old(self):
-        if self.change_mode() != -1:
+        self.change_mode()
+        if self.mode != -1:
             if self.to['promotion'][1] > 0:
                 data = {'ur': 1, 'dr': 0, 'user': 'SELF', 'hours': 24}
                 if self.to['seeder_num'] > 0:  # 当然也可以用 check_time，不过我觉得没必要
@@ -811,10 +741,10 @@ class MagicAndLimit:
 
     def magic_new(self):
         # ********** 根据 uc 使用量选取相应的规则
-        mode = self.change_mode()
-        if mode in [-1, len(self.m_conf['modes'])]:
+        self.change_mode()
+        if self.mode in [-1, len(modes)]:
             return
-        rules = self.m_conf['modes'][mode]['rules']
+        rules = modes[self.mode]['rules']
         raw_data = []
         up_data = {}
         down_data = {}
@@ -839,8 +769,7 @@ class MagicAndLimit:
         # ********** 时长、范围相同的情况下，上传和下载的魔法可以分开放也可以合并，uc 使用量是一样的
         # ********** 具体是否合并取决于时间检查
         for rule in rules:
-            _rule = deepcopy(rule)
-            data = self.check_rule(_rule)
+            data = self.check_rule(**rule)
             if isinstance(data, dict):
                 data.setdefault('hours', hours)
                 self.print(f"torrent {self.to['tid']} | rule {rule} - Passed. "
@@ -896,7 +825,7 @@ class MagicAndLimit:
             if not self.check_duplicate(magic_data):
                 self.send_magic(magic_data)
 
-    def check_rule(self, rule: Dict[str, Any]) -> Union[str, Dict[str, Any]]:
+    def check_rule(self, **rule) -> Union[str, Dict[str, Any]]:
         """
         检查魔法规则，如果通过则返回魔法数据
         如果返回 dict，则是检查通过，返回值是魔法信息
@@ -979,33 +908,36 @@ class MagicAndLimit:
 
         return rule
 
-    def expected_add(self, rule: Dict[str, Any]) -> Union[int, float]:  # 期望的上传量增加值
+    def expected_add(self, rule: Dict[str, Any]) -> Union[int, float]:
+        """期望的上传量增加值"""
         urr = rule['ur'] - self.to['promotion'][0]
         if 'total_uploaded' in self.to:
             e_up = self.to['total_uploaded'] / (self.to['total_done'] + 1024) * self.to['total_size']
             e_add = (e_up - self.byte(self.to.get('true_uploaded') or self.to['uploaded'], 0)) * urr
         else:
-            uploaded = self.byte(self.to['uploaded'], 0)
+            uploaded = self.byte(self.to.get('true_uploaded') or self.to['uploaded'], 0)
             downloaded = self.byte(self.to.get('true_downloaded') or self.to['downloaded'], 0)
             size = self.byte(self.to['size'], 0)
             if downloaded < 1024 ** 2:
-                e_add = self.m_conf['default_ratio'] * size * urr
+                e_add = default_ratio * size * urr
             else:
                 e_add = (size * uploaded / (downloaded + 1024) - uploaded) * urr
         return e_add
 
-    def expected_reduce(self, rule: Dict[str, Any]) -> Union[int, float]:  # 期望的下载量减少值
+    def expected_reduce(self, rule: Dict[str, Any]) -> Union[int, float]:
+        """期望的下载量减少值"""
         if 'total_size' in self.to:
             size = self.to['total_size']
         else:
             size = self.byte(self.to['size'], 0)
         return (size - self.byte(self.to.get('true_downloaded') or self.to['downloaded'], 0)) * (1 - rule['dr'])
 
-    def expected_cost(self, rule: Dict[str, Any]) -> float:  # 估计 uc 消耗量
+    def expected_cost(self, rule: Dict[str, Any]) -> float:
+        """估计 uc 消耗量"""
         c = self.coefficient
         m = {'SELF': 350, 'OTHER': 500, 'ALL': 1200}[rule['user']]
         if 'total_size' in self.to:
-            s = int(self.to['total_size'] / 1024 ** 3) + 1
+            s = self.to['total_size'] // 1024 ** 3 + 1
         else:
             [num, unit] = self.to['size'].split(' ')
             s = 1 if unit in ['MiB', '喵', 'MiБ'] else (
@@ -1013,49 +945,41 @@ class MagicAndLimit:
         ttl = self.deta / 2592000
         ttl = 1 if ttl < 1 else ttl
         ur, dr = float(rule['ur']), float(rule['dr'])
-        h = float(rule.get('hours') or self.m_conf['default_hours'])
+        h = float(rule.get('hours') or default_hours)
         e_cost = m * c * pow(s, 0.5) * (pow(2 * ur - 2, 1.5) + pow(2 - 2 * dr, 2)) * pow(ttl, -0.8) * pow(h, 0.5)
         return e_cost
 
     def check_time(self, data: Dict[str, Any]) -> Union[bool, None]:
         """优化放魔法时间，如果到了放魔法的时间则返回 True"""
         _begin = f"torrent {self.to['tid']} | magic {data}: "
-        if self.to.get('about_to_reannounce'):
+        if self.to.get('about_to_re_announce'):
             self.print(f"{_begin}is about to re-announce, passed")
             return True
         if 'total_size' not in self.to:
             if 'in_client' not in self.to and self.is_new:
-                '''新种，本该交给客户端的线程放魔法，但客户端失联，希望等待恢复
-                但如果一直失联超过一定时间，就必须放魔法了，时间是估算的，如果是 10G 带宽还要把时间估小一点'''
                 if self.deta > self.byte(self.to['size'], 0) / 55 / 1024 ** 2:
                     return True
                 return
-            '''除此之外，就是已确定不在客户端端下载的种子'''
             if self.to['seeder_num'] > 0:
                 self.print(f'{_begin}Seeder-num > 0, passed')
                 return True
             else:
                 self.print(f'{_begin}No seeder, wait')
         elif self.to['total_size'] < 1.5 * self.client.connect_interval * 110 * 1024 ** 2:
-            # 体积小于一定值，马上放魔法，防止过快下载导致来不及放魔法
             self.print(f'{_begin}Small size, passed')
             return True
         elif data['dr'] == 1 and self.to['total_uploaded'] == 0:
-            # 上传量为 0 则不放上传的魔法
             self.print(f'{_begin}No upload for up-magic, wait for seeding...')
             return
         elif data['ur'] == 1 and self.to['total_done'] == 0:
-            # 下载量为 0 则不放下载的魔法
             self.print(f'{_begin}No download for down-magic, wait for seeding...')
             return
         elif self.to['next_announce'] <= self.min_time:
-            # 快要到汇报时间则放魔法
             self.print(f"{_begin}Will announce in {int(self.min_time)}s, passed")
             return True
         elif data['user'] == 'SELF':
             if self.to['max_download_speed'] == -1:
                 if 0 < self.to['eta'] <= self.min_time:
-                    # 因为有 limit 函数，所以不能根据 eta 直接判断。另外，eta=0 是下载速度为 0
                     if self.this_time > 1 and self.this_up / self.this_time < 52428800:
                         self.print(f"{_begin}About to complete, passed")
                         return True
@@ -1067,32 +991,28 @@ class MagicAndLimit:
                 self.print(f"{_begin}About to release download limit and complete, passed")
                 return True
         elif 0 < self.to['eta'] <= self.min_time:
-            # 给所有人放魔法，如果自己快要下完则放魔法
             self.print(f"{_begin}About to complete, passed")
             return True
         elif self.to['max_download_speed'] != -1:
             self.print(f"{_begin}Others are about to complete, passed")
             return True
         elif self.deta > 1800 - self.min_time:
-            # 给所有人放魔法，如果快要到 30 分钟则放魔法
             self.print(f"{_begin}Others are about to announce, passed")
             return True
         elif data['ur'] == 1:
             if self.to['total_size'] > 15 * 1024 ** 3 and self.deta < 120:
                 self.print(f"{_begin}Wait for a while, if anyone going to magic")
-                # 其实是给其他放魔法留出一点时间，但总体上来说，free 放得越早越好，不管对自己还是其他人来说
-                # if time.time() - self.to['first_seed_time'] < 120:
                 return
             if self.to['total_size'] > 200 * 1024 ** 3:
                 self.print(f"{_begin}Large size. Wait...")
-                # 体积太大了，再等等吧-_-}\
                 return
             self.print(f"{_begin}Passed")
             return True
         else:
             self.print(f"{_begin}Just wait...")
 
-    def print(self, st: str):  # 只输出一次信息，避免频繁输出
+    def print(self, st: str):
+        """只输出一次信息，避免频繁输出"""
         if 'statement' not in self.to:
             self.to['statement'] = []
         if st not in self.to['statement']:
@@ -1108,10 +1028,10 @@ class MagicAndLimit:
         第一步是未了避免不可预料的错误，比如网页结构改变导致优惠判断失效，或者网页的种子出现重复，或者给别人放魔法也需要检查
         第二步是因为客户端放魔法（循环间隔就是客户端的连接间隔）和爬网页更新种子优惠不是同步的
         """
-        for _info in self.magic_info:
-            if self.to['tid'] == _info['tid']:
-                if time() - _info['ts'] < _info['hours'] * 3600:
-                    if data['ur'] <= _info['ur'] and data['dr'] >= _info['dr']:
+        for info in self.magic_info:
+            if self.to['tid'] == info['tid']:
+                if time() - info['ts'] < info['hours'] * 3600:
+                    if data['ur'] <= info['ur'] and data['dr'] >= info['dr']:
                         return True
         if 'last_get_time' in self.to and time() - self.to['last_get_time'] < 0.01 or not self.is_new:
             return
@@ -1130,8 +1050,8 @@ class MagicAndLimit:
                                 pro_end_time = pytz.timezone(self.get_tz(soup)).localize(dt).timestamp()
                             else:
                                 pro_end_time = time() + 86400
-                            [_torrent.update({'promotion': self.to['promotion'], 'pro_end_time': pro_end_time}) 
-                             for _torrent in t_client[0].torrents_info if _torrent['tid'] == self.to['tid']]
+                            [_torrent.update({'promotion': pro, 'pro_end_time': pro_end_time})
+                             for _torrent in self.instances[0].torrents_info if _torrent['tid'] == self.to['tid']]
                             logger.warning(f'Magic for torrent {self.to["tid"]} already existed')
                             return True
             else:
@@ -1142,9 +1062,10 @@ class MagicAndLimit:
             logger.error(e)
 
     @property
-    def is_new(self) -> bool:  # 是否为新种
-        if self.to['tid'] > self.m_conf['min_tid'] or self.to['leecher_num'] > self.m_conf['min_leecher_num']:
-            if self.to['leecher_num'] / (self.to['seeder_num'] + 1) > self.m_conf['min_leecher_to_seeder_ratio']:
+    def is_new(self) -> bool:
+        """是否为新种"""
+        if self.to['tid'] > min_tid or self.to['leecher_num'] > min_leecher_num:
+            if self.to['leecher_num'] / (self.to['seeder_num'] + 1) > min_leecher_to_seeder_ratio:
                 return True
         return False
 
@@ -1152,10 +1073,11 @@ class MagicAndLimit:
     def min_time(self) -> Union[int, float]:
         last_interval = time() - self.last_connect
         li = min(max(last_interval, self.client.connect_interval), 6 * self.client.connect_interval)
-        return self.m_conf['min_connect_times_before_announce'] * li
+        return min_secs_before_announce / self.client.connect_interval * li
 
     @property
-    def this_up(self) -> int:  # 当前种子自上次汇报的上传量
+    def this_up(self) -> int:
+        """当前种子自上次汇报的上传量"""
         if 'uploaded_before' in self.to:
             _before = self.byte(self.to['uploaded_before'], 1)
         else:
@@ -1164,11 +1086,13 @@ class MagicAndLimit:
         return self.to['total_uploaded'] - _now + _before
 
     @property
-    def this_time(self) -> int:  # 当前种子距离上次汇报的时间
+    def this_time(self) -> int:
+        """当前种子距离上次汇报的时间"""
         return self.announce_interval - self.to['next_announce'] - 1
 
     @property
-    def announce_interval(self) -> int:  # 当前种子汇报间隔
+    def announce_interval(self) -> int:
+        """当前种子汇报间隔"""
         dt = self.deta
         if dt < 86400 * 7:
             return max(1800, self.client.min_announce_interval)
@@ -1179,7 +1103,6 @@ class MagicAndLimit:
 
     def send_magic(self, _data: Dict[str, Union[int, float, str]]):
         tid = self.to['tid']
-        url = f'https://u2.dmhy.org/promotion.php?action=magic&torrent={tid}'
 
         try:
             data = {'action': 'magic', 'divergence': '', 'base_everyone': '', 'base_self': '', 'base_other': '',
@@ -1191,15 +1114,12 @@ class MagicAndLimit:
                 _post = self.rq('post', 'https://u2.dmhy.org/promotion.php', retries=1, data=data)
                 if _post.status_code == 200:
                     self.magic_info.append({**_data, **{'tid': tid, 'ts': int(time()), 'uc': uc}})
-                    self.write_info()
+                    self.save_data()
                     user = data['user_other'] if data['user'] == 'OTHER' else data["user"].lower()
                     logger.warning(f'Sent a {data["ur"]}x upload and {data["dr"]}x download magic to torrent {tid}, '
                                    f'user {user}, duration {data["hours"]}h, ucoin cost {uc}')
-                    uc_24, uc_72 = self.total_uc_cost()
+                    uc_24, uc_72 = self.magic_info.total_uc_cost()
                     logger.info(f'Mode: ------ {self.mode}, 24h uc cost: ------ {uc_24}, 72h uc cost: ------ {uc_72}')
-                    # _to = deepcopy(self.to)
-                    # del _to['statement']
-                    # logger.debug(f'torrent info | {_to}')  # debug 用，感觉输出不是很好看
                     if uc > 30000 and 'date' in self.to:
                         co = uc / self.expected_cost(data) * self.coefficient
                         self.__class__.coefficient = co
@@ -1211,22 +1131,7 @@ class MagicAndLimit:
             logger.exception(e)
 
     @classmethod
-    def total_uc_cost(cls) -> Tuple[int, int]:  # 计算 24h 和 72h uc 使用量之和
-        uc_24 = 0
-        uc_72 = 0
-        tmp = []
-        for info in cls.magic_info:
-            dt = int(time()) - info['ts']
-            if dt < 259200:
-                tmp.append(info)
-                uc_72 += info['uc']
-                if dt < 86400:
-                    uc_24 += info['uc']
-        cls.magic_info = tmp
-        return uc_24, uc_72
-
-    @classmethod
-    def change_mode(cls) -> int:
+    def change_mode(cls):
         """根据 uc 使用量选取规则。
 
         为什么要动态规则呢，可能是因为我有选择困难症，不知道怎么放魔法好。
@@ -1236,43 +1141,37 @@ class MagicAndLimit:
         这是因为全站虚拟分享率在增长(看看公式里的 divergence 系数)，
         没有 free 的时候魔法系数就会下跌，也就是说放魔法还起到调节魔法价格的作用，
         这也是为什么我不希望总是全部放 free 的原因"""
-        m_conf = conf['magic']
-        old_mode = cls.mode
-        uc_24, uc_72 = cls.total_uc_cost()
-
-        if uc_24 > m_conf['uc_24_max'] or uc_72 > m_conf['uc_72_max']:
-            cls.mode = -1
-
-        elif m_conf['magic_new']:
-            if not m_conf['auto_mode']:
-                cls.mode = m_conf['default_mode']
-
-            else:
-                if cls.mode < 0:
-                    cls.mode = 0
-                mode_max = len(m_conf['modes'])
-                if cls.mode >= mode_max:
-                    cls.mode = mode_max - 1
-
-                # ********** 注意了这里有坑，配置不当会导致死循环
-                while True:
-                    uc_limit = m_conf['modes'][cls.mode]['uc_limit']
-                    if uc_24 > uc_limit['24_max'] or uc_72 > uc_limit['72_max']:
-                        cls.mode += 1
-                        if cls.mode == mode_max:
+        uc_24, uc_72 = cls.magic_info.total_uc_cost()
+        if (cls.uc_24, cls.uc_72) != (uc_24, uc_72):
+            cls.uc_24, cls.uc_72 = uc_24, uc_72
+            old_mode = cls.mode
+            if uc_24 > uc_24_max or uc_72 > uc_72_max:
+                cls.mode = -1
+            elif magic_new:
+                if not auto_mode:
+                    cls.mode = default_mode
+                else:
+                    if cls.mode < 0:
+                        cls.mode = 0
+                    mode_max = len(modes)
+                    if cls.mode >= mode_max:
+                        cls.mode = mode_max - 1
+                    while True:
+                        uc_limit = modes[cls.mode]['uc_limit']
+                        if uc_24 > uc_limit['24_max'] or uc_72 > uc_limit['72_max']:
+                            cls.mode += 1
+                            if cls.mode == mode_max:
+                                break
+                        elif uc_24 < uc_limit['24_min'] and uc_72 < uc_limit['72_min']:
+                            if cls.mode > 0:
+                                cls.mode -= 1
+                            if cls.mode == 0:
+                                break
+                        else:
                             break
-                    elif uc_24 < uc_limit['24_min'] and uc_72 < uc_limit['72_min']:
-                        if cls.mode > 0:
-                            cls.mode -= 1
-                        if cls.mode == 0:
-                            break
-                    else:
-                        break
-
-        if cls.mode != old_mode:
-            logger.warning(f'Mode for new torrents change from {old_mode} to {cls.mode}')
-            cls.write_info()
-        return cls.mode
+            if cls.mode != old_mode:
+                logger.warning(f'Mode for new torrents change from {old_mode} to {cls.mode}')
+                cls.save_data()
 
     def limit_speed(self):
         """将两次汇报间的平均速度限制到 50M/s 以下
@@ -1322,7 +1221,7 @@ class MagicAndLimit:
                     except:
                         pass
 
-            if self.l_conf['variable_announce_interval']:
+            if variable_announce_interval:
                 self.optimize_announce_time()
 
             self.limit_download_speed()
@@ -1555,17 +1454,17 @@ class MagicAndLimit:
 
     def re_an(self):
         if not ('lft' in self.to and time() - self.to['lft'] < 900):
-            self.to['about_to_reannounce'] = True
+            self.to['about_to_re_announce'] = True
             _to = self.to
-            if self.m_conf['enable']:
+            if magic:
                 self.magic()
             self.to = _to
             sleep(1)
-            self.client.reannounce(self.to['_id'])
+            self.client.re_announce(self.to['_id'])
             self.to['lft'] = time()
             if 'last_announce_time' in self.to:
                 self.to['last_announce_time'] = time()
-            self.to['about_to_reannounce'] = False
+            self.to['about_to_re_announce'] = False
 
     def update_tid(self):
         """根据 hash 搜索种子 id"""
@@ -1590,7 +1489,7 @@ class MagicAndLimit:
         tmp_to = self.to
         try:
             page = self.rq('get',
-                           f'https://u2.dmhy.org/getusertorrentlistajax.php?userid={conf["uid"]}&type=leeching').text
+                           f'https://u2.dmhy.org/getusertorrentlistajax.php?userid={uid}&type=leeching').text
             table = BeautifulSoup(page.replace('\n', ''), 'lxml').table
             if not table:
                 return
@@ -1603,7 +1502,7 @@ class MagicAndLimit:
                     data = {'uploaded': tr.contents[6].get_text(' '), 'last_get_time': time()}
 
                     if 'date' in self.to and 'last_get_time' in self.to:
-                        if time() - self.this_time + 10 > self.to['last_get_time']:
+                        if time() - self.this_time + 2 > self.to['last_get_time']:
                             if 'true_uploaded' in self.to or 'last_announce_time' in self.to:
                                 tmp_info.append(self.to)
                             if self.to['total_uploaded'] - self.byte(data['uploaded'], 1) > \
@@ -1614,7 +1513,7 @@ class MagicAndLimit:
                                 self.print(f"Last announce upload of torrent {tid} is {data['uploaded']}")
 
                     self.to.update(data)
-                    [_torrent.update(data) for _torrent in t_client[0].torrents_info if _torrent['tid'] == tid]
+                    [_torrent.update(data) for _torrent in self.instances[0].torrents_info if _torrent['tid'] == tid]
 
             for self.to in tmp_info:
                 self.info_from_peer_list()
@@ -1656,88 +1555,72 @@ class MagicAndLimit:
                     break
 
 
-if __name__ == '__main__':
-    modes = conf['magic']['modes']
-    if modes and len(modes) > 1:
-        for i in range(len(modes) - 1):
-            if modes[i]['uc_limit']['24_max'] < modes[i + 1]['uc_limit']['24_min']:
-                raise ConfigError()
-            if modes[i]['uc_limit']['72_max'] < modes[i + 1]['uc_limit']['72_min']:
-                raise ConfigError()
-    
-    log_path = conf.get('log_path') or f'{os.path.splitext(__file__)[0]}.log'
-    data_path = conf.get('data_path') or f'{os.path.splitext(__file__)[0]}.data.txt'
-    logger.remove(handler_id=0)  # 默认有一个 sys.stderr handler 会输出 debug 信息，需要清除
-    level = 'DEBUG' if conf['enable_debug_output'] else 'INFO'
-    logger.add(sink=sys.stderr, level=level)
-    torrents_info = {}
-    with open(data_path, 'a', encoding='utf-8') as _f1:
-        pass
-    with open(data_path, 'r', encoding='utf-8') as _f2:
-        for _line in _f2:
-            if _line.startswith('torrents_info = '):
-                torrents_info = eval(_line.lstrip('torrents_info = '))
-    MagicAndLimit.init()
+class Main:
+    def __init__(self):
+        self.cls = MagicAndLimit
+        self.init()
 
-    local_client = None
-    if conf['magic']['enable'] or conf['limit']['enable']:
-        t_client: List[MagicAndLimit] = [MagicAndLimit(None)]
-        if len(conf['clients']) > 0 and conf['enable_clients']:
-            for _c in conf['clients']:
-                _t = _c['type']
-                del _c['type']
-                if _t in ['de', 'Deluge', 'deluge']:
-                    _c.setdefault('decode_utf8', True)
-                    _c.setdefault('connect_interval', 5)
-                    _c.setdefault('min_announce_interval', 300)
-                    if _c['host'] == '127.0.0.1':
-                        local_client = Deluge(**_c)
-                        _client = MagicAndLimit(local_client)
-                    else:
-                        _client = MagicAndLimit(Deluge(**_c))
-                        
-                    try:
-                        min_announce_interval = _client.client.ltconfig.get_settings()['min_announce_interval']
-                    except:
-                        min_announce_interval = 300
-                    if _c['min_announce_interval'] != min_announce_interval:
-                        raise ConfigError()
-                        
-                    t_client[0].clients.append(Deluge(**_c))
-                    t_client.append(_client)
+    def init(self):
+        if len(modes) > 1:
+            for i in range(len(modes) - 1):
+                if modes[i]['uc_limit']['24_max'] < modes[i + 1]['uc_limit']['24_min']:
+                    raise ValueError(f"modes[{i}]['uc_limit']['24_max'] < modes[{i + 1}]['uc_limit']['24_min']")
+                if modes[i]['uc_limit']['72_max'] < modes[i + 1]['uc_limit']['72_min']:
+                    raise ValueError(f"modes[{i}]['uc_limit']['72_max'] < modes[{i + 1}]['uc_limit']['72_min']")
 
-        if local_client is None:
-            logger.add(sink=log_path, level=level, rotation='5 MB')
-        else:
-            logger.add(sink=log_path, level=level, rotation='5 MB', filter=local_client.log_filter)
+        with open(data_path, 'a', encoding='utf-8'):
+            pass
+        with open(data_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                for key in self.cls.data_keys:
+                    if line.startswith(f'{key} = '):
+                        setattr(self.cls, key, eval(line.lstrip(f'{key} = ')))
+        self.cls.magic_info = MagicInfo(self.cls.magic_info)
 
-        for _i, info_ in torrents_info.items():
+        if magic or limit:
+            self.cls(None)
+            if len(clients_info) > 0 and enable_clients:
+                for client_info in clients_info:
+                    client_type = client_info['type']
+                    del client_info['type']
+                    if client_type in ['de', 'Deluge', 'deluge']:
+                        client_info.setdefault('decode_utf8', True)
+                        client_info.setdefault('connect_interval', 5)
+                        client_info.setdefault('min_announce_interval', 300)
+                        self.cls(Deluge(**client_info))
+                        self.cls.instances[0].clients.append(Deluge(**client_info))
+
+        logger.remove(handler_id=0)
+        # 默认有一个 sys.stderr handler 会输出 debug 信息，需要清除
+        level = 'DEBUG' if enable_debug_output else 'INFO'
+        logger.add(sink=sys.stderr, level=level)
+        logger.add(sink=log_path, level=level, rotation='5 MB', filter=BTClient.log_filter)
+
+    def run(self):
+        if self.cls.instances:
             try:
-                t_client[_i].torrents_info = info_
-            except:
-                pass
+                with ThreadPoolExecutor(max_workers=len(self.cls.instances)) as executor:
+                    futures = {executor.submit(instance.run): instance.client for instance in self.cls.instances}
+                    # 因为 deluge 很容易失联，如果有多个客户端，要分配多个线程让各个客户端时间上不受牵制。
+                    # 第一个线程客户端是 None，这个线程的任务就是定期爬网页以及放魔法(对不在客户端的种子)，
+                    # 单独开限速时，这个线程什么也不做。之后的线程每个都对应有一个客户端，给在客户端的种子放魔法以及限速
+                    for future in as_completed(futures):
+                        try:
+                            future.result()
+                        except BaseException as er:
+                            client = futures[future]
+                            if client is None:
+                                logger.critical('Thread 0 terminated unexpectedly')
+                            else:
+                                logger.critical(f'Thread for deluge on {client.host} terminated unexpectedly')
+                            logger.exception(er)
+            except (KeyboardInterrupt, SystemExit):
+                self.cls.save_data()
+                os._exit(0)
+        else:
+            logger.info('The program will do nothing')
 
-        try:
-            with ThreadPoolExecutor(max_workers=len(t_client)) as _executor:
-                _futures = {_executor.submit(_c.run): _c.client for _c in t_client}
-                """因为 deluge 很容易失联，如果有多个客户端，要分配多个线程让各个客户端时间上不受牵制。
-                第一个线程客户端是 None，这个线程的任务就是定期爬网页以及放魔法(对不在客户端的种子)，
-                单独开限速时，这个线程什么也不做。之后的线程每个都对应有一个客户端，给在客户端的种子放魔法以及限速"""
-                for _future in as_completed(_futures):
-                    try:
-                        _future.result()
-                    except BaseException as _e:
-                        _client = _futures[_future]
-                        if _client is None:
-                            logger.critical('Thread 0 terminated unexpectedly')
-                        else:
-                            logger.critical(f'Thread for deluge on {_client.host} terminated unexpectedly')
-                        logger.exception(_e)
-        except KeyboardInterrupt:
-            logger.warning(f'This script: {__file__} has been manually terminated.')
-            MagicAndLimit.write_info()
-            os._exit(0)
 
-    else:
-        logger.error('The program will do nothing')
-        os._exit(0)
+if __name__ == '__main__':
+    Main().run()
+
