@@ -40,6 +40,7 @@ import re
 import sys
 import subprocess
 import aiohttp
+import nest_asyncio
 import paramiko
 import pytz
 
@@ -1357,8 +1358,8 @@ class Limit(FunctionBase):
         for self.to in self.torrent_manager.values():
 
             if self.to.tid == -1:
-                '''旧种子默认不限速，因为没有查详情页不知道 id，不知道上传汇报的上传量。
-                但是当上传速度超过 50M/s 后就有超速可能，这时候就需要查找 id'''
+                # 旧种子默认不限速，因为没有查详情页不知道 id，不知道上传汇报的上传量。
+                # 但是当上传速度超过 50M/s 后就有超速可能，这时候就需要查找 id
                 if self.to.upload_payload_rate > 52428800 and not self.to.get('404'):
                     logger.debug(f'Try to find tid of {self.to._id} --- ')
                     try:
@@ -1392,14 +1393,14 @@ class Limit(FunctionBase):
                         pass
 
             if variable_announce_interval:
-                self.optimize_announce_time()
+                await self.optimize_announce_time()
 
             self.limit_download_speed()
 
             if self.to.this_time < 0:  # 汇报后 tracker 还没有返回
                 continue
 
-            self.limit_upload_speed()
+            await self.limit_upload_speed()
 
     def limit_download_speed(self):
         this_time = self.to.this_time
@@ -1458,7 +1459,7 @@ class Limit(FunctionBase):
                         pass
                 logger.error(f'Torrent {self.to.tid} | failed to remove upload limit')
 
-    def limit_upload_speed(self):
+    async def limit_upload_speed(self):
         this_time = self.to.this_time
         this_up = self.to.this_up
         announce_interval = self.to.announce_interval
@@ -1485,7 +1486,7 @@ class Limit(FunctionBase):
             if self.to.max_upload_speed == 5120:
                 # 在 optimize_announce_time 用到了这个，也可以手动限速到 5120k 等待汇报
                 if this_up / this_time < 52428800 and this_time >= 900:
-                    self.re_an()
+                    await self.re_an()
                     self.to.set_upload_limit(-1)
                     logger.info('Average upload speed below 50MiB/s, remove 5120K up-limit')
             elif this_time < 120:  # 已经汇报完，解除上传限速
@@ -1499,7 +1500,7 @@ class Limit(FunctionBase):
                     logger.info(f'Removed upload speed limit of torrent {self.to.tid}.')
                 elif max_upload_speed < 0:  # 上传量超过了一个汇报间隔内不超速的最大值
                     if this_up / this_time < 209715200:
-                        if self.re_an():
+                        if await self.re_an():
                             logger.error(f'Failed to limit upload speed limit of torrent {self.to.tid} '
                                          f'because the upload exceeded')
                     else:
@@ -1529,7 +1530,7 @@ class Limit(FunctionBase):
                                          f'to {max_upload_speed:.2f}K')
                             self.to._t = time()
 
-    def optimize_announce_time(self):
+    async def optimize_announce_time(self):
         """尽量把完成前最后一次汇报时间调整到最合适的点，粗略计算，没有严格讨论问题。
 
         解释一下，假设一个种子的下载时间超过汇报时长，并且这个种子每次汇报前都经过限速并且两次汇报间的平均速度接近 50M/s，
@@ -1569,7 +1570,7 @@ class Limit(FunctionBase):
             if earliest > perfect_time:
                 if time() >= earliest:
                     if (this_up + upspeed * 20) / this_time > 52428800:
-                        self.re_an()
+                        await self.re_an()
                         logger.info(f'Re-announce torrent {self.to.tid}')
                     return
                 if earliest < perfect_time + 60:
@@ -1590,12 +1591,12 @@ class Limit(FunctionBase):
                         self.to.set_upload_limit(5120)
                         logger.info(f'Set 5120K upload limit for torrent {self.to.tid}, waiting for re-announce')
 
-    def re_an(self):
+    async def re_an(self):
         if not (self.to.lft and time() - self.to.lft < 900):
             self.to.about_to_re_announce = True
             _to = self.to
             if magic:
-                asyncio.run(self.magic())
+                await self.magic()
             self.to = _to
             sleep(1)
 
@@ -1697,6 +1698,7 @@ class Run(Magic, Limit):
 class Main:
     def __init__(self, cls=Run):
         self.cls = cls
+        nest_asyncio.apply()
 
         if len(modes) > 1:
             for i in range(len(modes) - 1):
@@ -1766,4 +1768,3 @@ class Main:
 
 if __name__ == '__main__':
     Main().run()
-
