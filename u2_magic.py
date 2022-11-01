@@ -554,17 +554,6 @@ class TorrentWrapper:
     def __str__(self):
         return f'{self.__class__.__name__}({self.torrent_dict}, {self.manager})'
 
-    def update(self, obj):
-        if obj.__class__ == self.__class__:
-            obj = obj.torrent_dict
-        self.torrent_dict.update(obj)
-
-    def pop(self, key):
-        self.torrent_dict.pop(key)
-
-    def items(self):
-        return self.torrent_dict.items()
-
     @property
     def announce_interval(self) -> int:
         """当前种子汇报间隔"""
@@ -840,13 +829,16 @@ class FunctionBase:
                 tw.update(_id_td[_id])
                 if not tw.first_seed_time and tw.total_done > 0:
                     tw.first_seed_time = time()
-                if _id in _id_tw_0 or tw.tid in self.instances[0].torrent_manager:
+                if _id in _id_tw_0:
                     tw.update(_id_tw_0[_id])
+                elif tw.tid in self.instances[0].torrent_manager:
+                    tw.update(self.instances[0].torrent_manager[tw.tid])
                 _id_td.pop(_id)
             else:  # 本次连接种子不在下载
                 self.torrent_manager.pop(_id)
 
         for _id, td in _id_td.items():  # 本次连接新加入的种子
+            td._id = _id
             if _id in _id_tw_0:
                 td.update(_id_tw_0[_id])
                 _id_tw_0[_id].in_client = True
@@ -1008,8 +1000,9 @@ class Magic(FunctionBase):
             else:
                 await self.magic_old()
         if self.magic_tasks:
-            await asyncio.gather(*self.magic_tasks)
-            self.save_magic_info()
+            async with aiohttp.ClientSession() as self.session:
+                await asyncio.gather(*self.magic_tasks)
+                self.save_magic_info()
 
     async def magic_old(self):
         if self.mode != -1:
@@ -1458,7 +1451,7 @@ class Limit(FunctionBase):
                 for _ in range(30):
                     sleep(1)
                     try:
-                        if self.to.torrent_status(['state']) == 'Seeding':
+                        if self.to.torrent_status(['state'])['state'] == 'Seeding':
                             self.to.set_upload_limit(-1)
                             return
                     except:
@@ -1661,7 +1654,8 @@ class Limit(FunctionBase):
                         self.instances[0].torrent_manager[tid].update(data)
 
             tasks = [self.torrent_manager.info_from_peer_list(to) for to in tmp_info]
-            await asyncio.gather(*tasks)
+            async with aiohttp.ClientSession() as self.session:
+                await asyncio.gather(*tasks)
         except Exception as e:
             logger.exception(e)
 
