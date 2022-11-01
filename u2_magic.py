@@ -175,11 +175,11 @@ variable_announce_interval = True
 '开启后会尝试调节完成前最后一次汇报时间'
 
 # ****************************************************可调节配置**********************************************************
-log_path = '/root/test/u2_magic.new.log'  # f'{os.path.splitext(__file__)[0]}.log'  # type: str
+log_path = f'{os.path.splitext(__file__)[0]}.log'  # type: str
 '日志文件路径'
-magic_info_path = '/root/test/u2_magic.new.magic_info'  # f'{os.path.splitext(__file__)[0]}.magic_info'  # type: str
+magic_info_path = f'{os.path.splitext(__file__)[0]}.magic_info'  # type: str
 '魔法信息保存路径'
-torrents_info_path = '/root/test/u2_magic.new.torrents_info'  # f'{os.path.splitext(__file__)[0]}.torrents_info'  # type: str
+torrents_info_path = f'{os.path.splitext(__file__)[0]}.torrents_info'  # type: str
 '种子信息保存路径'
 enable_debug_output = True  # type: Any
 '为真时会输出 debug 级别日志，否则只输出 info 级别日志'
@@ -194,6 +194,10 @@ max_cache_size = 256  # type: int
 class BTClient(metaclass=ABCMeta):
     """BT 客户端基类"""
     local_clients = []
+    status_keys = ['download_payload_rate', 'eta', 'max_download_speed', 'max_upload_speed',
+                   'name', 'next_announce', 'num_seeds', 'total_done', 'total_uploaded',
+                   'total_size', 'tracker', 'time_added', 'upload_payload_rate'
+                   ]
 
     def __init__(self, host, port, min_announce_interval, connect_interval):
         self.host = host
@@ -374,7 +378,7 @@ class TorrentDict(UserDict):
     def update(self, obj, **kwargs):
         if isinstance(obj, TorrentWrapper):
             obj = obj.torrent_dict
-        return super(TorrentDict, self).update(obj, **kwargs)
+        return super(self.__class__, self).update(obj, **kwargs)
 
     @property
     def delta(self):
@@ -433,6 +437,7 @@ class TorrentManager(UserDict):
         self.ana_updated = False
         self.last_connect = time()
         self.session = None
+        self.deque_length = None
 
     def __repr__(self):
         return f'{self.__class__.__name__}({self.data}, accurate_next_announce={self.ana})'
@@ -449,8 +454,8 @@ class TorrentManager(UserDict):
         with open(torrents_info_path, 'w', encoding='utf-8') as f:
             f.write('\n'.join([instance.__repr__() for instance in cls.instances]))
 
-    async def rq(self, url: str, method: str = 'get',
-                 timeout: Union[int, float] = 10, retries: int = 5, **kw) -> Union[str, None]:
+    async def request(self, url: str, method: str = 'get',
+                      timeout: Union[int, float] = 10, retries: int = 5, **kw) -> Union[str, None]:
         """网页请求"""
         if BTClient.local_clients and any(local_client.tc_limited for local_client in BTClient.local_clients):
             # 限速爬不动
@@ -476,9 +481,9 @@ class TorrentManager(UserDict):
                 elif isinstance(e, asyncio.TimeoutError):
                     timeout += 20
 
-    async def info_from_peerlist(self, to):
+    async def info_from_peer_list(self, to):
         try:
-            peer_list = await self.rq(f'https://u2.dmhy.org/viewpeerlist.php?id={to.tid}')
+            peer_list = await self.request(f'https://u2.dmhy.org/viewpeerlist.php?id={to.tid}')
             tables = BeautifulSoup(peer_list.replace('\n', ' '), 'lxml').find_all('table')
         except Exception as e:
             logger.error(e)
@@ -503,6 +508,12 @@ class TorrentManager(UserDict):
                         to.last_announce_time = time() - idle
 
                     break
+
+    def dl_to_info(self, keys=None):
+        if keys:
+            return self.client.downloading_torrents_info(keys)
+        else:
+            return self.client.downloading_torrents_info(self.client.status_keys)
 
 
 class TorrentWrapper:
@@ -588,7 +599,7 @@ class TorrentWrapper:
     async def find_last_announce(self):
         self.last_announce_time = time()
         async with aiohttp.ClientSession() as self.manager.session:
-            await self.manager.info_from_peerlist(self)
+            await self.manager.info_from_peer_list(self)
 
     @property
     def next_announce(self):
@@ -620,6 +631,25 @@ class TorrentWrapper:
         else:
             return next_announce
 
+    def set_upload_limit(self, rate):
+        self.manager.client.set_upload_limit(self._id, rate)
+        self.max_upload_speed = rate
+
+    def set_download_limit(self, rate):
+        self.manager.client.set_download_limit(self._id, rate)
+        self.max_download_speed = rate
+
+    def re_announce(self):
+        self.manager.client.re_announce(self._id)
+        logger.info(f'Re-announce of torrent {self.tid}')
+        self.lft = time()
+        if self.last_announce_time:
+            self.last_announce_time = time()
+        self.about_to_re_announce = False
+
+    def torrent_status(self, keys):
+        return self.manager.client.torrent_status(self._id, keys)
+
 
 class MagicInfo(UserList):
     def __init__(self, lst=None, mode: int = 0, c: float = 1.549161):
@@ -628,7 +658,7 @@ class MagicInfo(UserList):
         self.c = c
         self.update_ts = int(time()) - 1
         self.uc_24, self.uc_72 = 0, 0
-        self.total_uc_cost()
+        self.get_mode()
 
     def __str__(self):
         return f'{self.__class__.__name__}({self.data}, mode={self.mode}, c={self.c})'
@@ -650,7 +680,7 @@ class MagicInfo(UserList):
             self.c = uc / self.expected_cost(to, info) * self.c
             logger.info(f'divergence / sqrt(S0): {self.c:.6f}')
 
-    def total_uc_cost(self) -> Tuple[int, int]:
+    def get_mode(self) -> int:
         """计算 24h 和 72h uc 使用量之和"""
         t = int(time())
         if t >= self.update_ts:
@@ -670,7 +700,7 @@ class MagicInfo(UserList):
                         self.update_ts = t0 + info['ts']
             self.uc_24, self.uc_72 = uc_24, uc_72
             self.change_mode()
-        return self.uc_24, self.uc_72
+        return self.mode
 
     def change_mode(self):
         old_mode = self.mode
@@ -724,8 +754,7 @@ class MagicInfo(UserList):
             s = 1 if unit in ['MiB', '喵', 'MiБ'] else (
                     int(float(num) * 1024 if unit in ['TiB', '烫', 'TiБ'] else float(num)) + 1
             )
-        e_cost = m * c * pow(s, 0.5) * (pow(2 * ur - 2, 1.5) + pow(2 - 2 * dr, 2)) * pow(ttl, -0.8) * pow(h, 0.5)
-        return e_cost
+        return m * c * pow(s, 0.5) * (pow(2 * ur - 2, 1.5) + pow(2 - 2 * dr, 2)) * pow(ttl, -0.8) * pow(h, 0.5)
 
     def save_data(self):
         with open(magic_info_path, 'w', encoding='utf-8') as f:
@@ -734,11 +763,6 @@ class MagicInfo(UserList):
 
 class FunctionBase:
     instances = []
-
-    status_keys = ['download_payload_rate', 'eta', 'max_download_speed', 'max_upload_speed',
-                   'name', 'next_announce', 'num_seeds', 'total_done', 'total_uploaded',
-                   'total_size', 'tracker', 'time_added', 'upload_payload_rate'
-                   ]
 
     def __init__(self, client: Union[Deluge, None]):
         self.client = client
@@ -752,11 +776,13 @@ class FunctionBase:
         else:
             self.torrent_manager: TorrentManager = TorrentManager.instances[n]
             self.torrent_manager.client = self.client
+        if self.client:
+            self.torrent_manager.deque_length = int(300 / self.client.connect_interval) + 1
         self.to: TorrentWrapper = None
         self.clients = []
         self.magic_tasks = []
 
-    def magic(self):
+    async def magic(self):
         pass
 
     def print(self, st: str):
@@ -780,6 +806,21 @@ class FunctionBase:
     def save_torrents_info(cls):
         TorrentManager.save_data()
 
+    @property
+    def request(self):
+        return self.torrent_manager.request
+
+    @property
+    def session(self):
+        return self.torrent_manager.session
+
+    @session.setter
+    def session(self, ses):
+        self.torrent_manager.session = ses
+
+    def dl_to_info(self, keys=None):
+        return self.torrent_manager.dl_to_info(keys)
+
     async def get_info_from_client(self):
         """读取客户端种子的状态，并且与已知信息合并
         由于客户端只有种子的 hash 信息，而放魔法需要知道种子 id
@@ -787,7 +828,7 @@ class FunctionBase:
         采用对比的方式合并种子信息，旧种子的 id 将会被设置为 -1"""
 
         _id_td = {
-            _id: TorrentDict(dic) for _id, dic in self.client.downloading_torrents_info(self.status_keys).items()
+            _id: TorrentDict(dic) for _id, dic in self.dl_to_info().items()
             if dic.get('tracker') and 'daydream.dmhy.best' in dic['tracker']
         }
         _id_tw_0 = {tw._id: tw for tw in self.instances[0].torrent_manager.values() if tw._id}
@@ -839,8 +880,8 @@ class Magic(FunctionBase):
 
     async def get_info_from_web(self):
         try:
-            async with aiohttp.ClientSession() as self.torrent_manager.session:
-                page = await self.torrent_manager.rq(
+            async with aiohttp.ClientSession() as self.session:
+                page = await self.request(
                     f'https://u2.dmhy.org/getusertorrentlistajax.php?userid={uid}&type=leeching')
         except Exception as e:
             logger.exception(e)
@@ -866,7 +907,8 @@ class Magic(FunctionBase):
                         }
                     )
 
-                for tid, tw in self.torrent_manager.items():
+                for tid in list(self.torrent_manager):
+                    tw = self.torrent_manager[tid]
                     if tid in tid_td:
                         td = tid_td[tid]
                         if (td.get('pro_end_time') or 0) > time():
@@ -880,9 +922,8 @@ class Magic(FunctionBase):
                 for tid, td in tid_td.items():  # 新种子
                     td.uploaded_before = td.uploaded
                     if tid > min_tid or td.leecher_num > min_leecher_num:
-                        async with aiohttp.ClientSession() as self.torrent_manager.session:
-                            detail_page = await self.torrent_manager.rq(
-                                f'https://u2.dmhy.org/details.php?id={tid}&hit=1')
+                        async with aiohttp.ClientSession() as self.session:
+                            detail_page = await self.request(f'https://u2.dmhy.org/details.php?id={tid}&hit=1')
                         soup = BeautifulSoup(detail_page.replace('\n', ''), 'lxml')
                         td.tz = self.get_tz(soup)
                         tab = soup.find('table', {'width': '90%'})
@@ -904,7 +945,7 @@ class Magic(FunctionBase):
 
         if _id_tw and len(self.instances) > 1:
             with ThreadPoolExecutor(max_workers=len(self.instances) - 1) as executor:
-                futures = [executor.submit(cl.downloading_torrents_info, self.status_keys) for cl in self.clients]
+                futures = [executor.submit(cl.downloading_torrents_info, cl.status_keys) for cl in self.clients]
                 for future in as_completed(futures):
                     try:
                         _id_dict = future.result()
@@ -948,7 +989,10 @@ class Magic(FunctionBase):
 
     @property
     def mode(self):
-        return self.magic_info.mode
+        return self.magic_info.get_mode()
+
+    def save_magic_info(self):
+        self.magic_info.save_data()
 
     async def magic(self):
         self.magic_tasks = []
@@ -965,7 +1009,7 @@ class Magic(FunctionBase):
                 await self.magic_old()
         if self.magic_tasks:
             await asyncio.gather(*self.magic_tasks)
-            self.magic_info.save_data()
+            self.save_magic_info()
 
     async def magic_old(self):
         if self.mode != -1:
@@ -1254,8 +1298,8 @@ class Magic(FunctionBase):
             return
 
         try:
-            async with aiohttp.ClientSession() as self.torrent_manager.session:
-                page = await self.torrent_manager.rq(f'https://u2.dmhy.org/details.php?id={tid}&hit=1')
+            async with aiohttp.ClientSession() as self.session:
+                page = await self.request(f'https://u2.dmhy.org/details.php?id={tid}&hit=1')
             soup = BeautifulSoup(page.replace('\n', ''), 'lxml')
             table = soup.find('table', {'width': '90%'})
             if table:
@@ -1288,14 +1332,11 @@ class Magic(FunctionBase):
             data = {'action': 'magic', 'divergence': '', 'base_everyone': '', 'base_self': '', 'base_other': '',
                     'torrent': tid, 'tsize': '', 'ttl': '', 'user_other': '', 'start': 0, 'promotion': 8, 'comment': ''}
             data.update(_data)
-            response = await self.torrent_manager.rq(
-                'https://u2.dmhy.org/promotion.php?test=1', method='post', data=data)
+            response = await self.request('https://u2.dmhy.org/promotion.php?test=1', method='post', data=data)
             _json = json.loads(response)
             if _json['status'] == 'operational':
                 uc = int(float(BeautifulSoup(_json['price'], 'lxml').span['title'].replace(',', '')))
-                _post = await self.torrent_manager.rq(
-                    'https://u2.dmhy.org/promotion.php', method='post', retries=0, data=data
-                )
+                _post = await self.request('https://u2.dmhy.org/promotion.php', method='post', retries=0, data=data)
                 if re.match(r'^<script.+<\/script>$', _post):
                     self.magic_info.add_magic(to, {**_data, **{'tid': tid, 'ts': int(time()), 'uc': uc}})
                 else:
@@ -1375,57 +1416,50 @@ class Limit(FunctionBase):
                 ps = 0
                 m_t = self.to.min_time
                 if self.to.max_upload_speed != -1:
-                    '''上传限速时，如果限速值很低，给其他 peer 上传速度低，
-                    其他 peer 给自己的上传速度也会很低，所以会严重拖慢下载进度，eta 值会变大。
-                    但是出种后其他 peer 变成做种状态，这时候的上传策略一般是根据下载者的下载速度，
-                    跟下载者的上传速度没有关系，由于先前没有下载限速，所以这时候种子可能突然变成满速下载，
-                    不仅下载时间短而且客户端可能变得很难连接，可能导致限速失败。
-                    所以这里在上传限速时检查其他 peer 的进度，在其他 peer 完成前提前下载限速。'''
+                    # 上传限速时，如果限速值很低，给其他 peer 上传速度低，
+                    # 其他 peer 给自己的上传速度也会很低，所以会严重拖慢下载进度，eta 值会变大。
+                    # 但是出种后其他 peer 变成做种状态，这时候的上传策略一般是根据下载者的下载速度，
+                    # 跟下载者的上传速度没有关系，由于先前没有下载限速，所以这时候种子可能突然变成满速下载，
+                    # 不仅下载时间短而且客户端可能变得很难连接，可能导致限速失败。
+                    # 所以这里在上传限速时检查其他 peer 的进度，在其他 peer 完成前提前下载限速。
                     m_t = 2 * self.to.min_time
                     p0 = 1 - 1610612736 / self.to.total_size
                     try:
-                        for peer in self.client.torrent_status(self.to._id, ['peers'])['peers']:
+                        for peer in self.to.torrent_status(['peers'])['peers']:
                             if peer['progress'] > p0:
                                 ps += 1
                     except:
                         pass
                 if 0 < self.to.eta <= m_t or self.to.max_upload_speed != -1 and ps > 20:
                     # 平均速度超过 50M/s 并且快要完成，开始下载限速
-                    max_download_speed = (self.to.total_size - self.to.total_done) / (
-                            this_up / 52428800 - this_time + 30) / 1024
-                    self.client.set_download_limit(self.to._id, max_download_speed)
-                    logger.warning(f'Begin to limit download speed of torrent {self.to.tid}.'
-                                   f' Value ------- {max_download_speed:.2f}K')
+                    max_download_speed = (self.to.total_size - self.to.total_done) / (this_up / 52428800 - this_time + 30) / 1024
+                    self.to.set_download_limit(max_download_speed)
+                    logger.warning(f'Begin to limit download speed of torrent {self.to.tid}. Value ------- {max_download_speed:.2f}K')
         elif this_time > 0:
             if this_up / this_time >= 52428800:
                 # 已有下载限速，调整限速值
                 if self.to.download_payload_rate / 1024 < 2 * self.to.max_download_speed:
-                    max_download_speed = (self.to.total_size - self.to.total_done) / (
-                            this_up / 52428800 - this_time + 60) / 1024
+                    max_download_speed = (self.to.total_size - self.to.total_done) / (this_up / 52428800 - this_time + 60) / 1024
                     max_download_speed = min(max_download_speed, 512000)
                     if max_download_speed > 1.5 * self.to.max_download_speed:
                         max_download_speed = 1.5 * self.to.max_download_speed
-                        self.client.set_download_limit(self.to._id, max_download_speed)
-                        logger.debug(f'Change the max download speed of torrent {self.to.tid} '
-                                     f'to {max_download_speed:.2f}K')
+                        self.to.set_download_limit(max_download_speed)
+                        logger.debug(f'Change the max download speed of torrent {self.to.tid} to {max_download_speed:.2f}K')
                     elif max_download_speed < self.to.max_download_speed:
                         max_download_speed = max_download_speed / 1.5
-                        self.client.set_download_limit(self.to._id, max_download_speed)
-                        logger.debug(f'Change the max download speed of torrent {self.to.tid} '
-                                     f'to {max_download_speed:.2f}K')
+                        self.to.set_download_limit(max_download_speed)
+                        logger.debug(f'Change the max download speed of torrent {self.to.tid} to {max_download_speed:.2f}K')
             else:
-                '''平均速度已降到 50M/s 以下，解除限速，之似乎发现 tracker 计算的时间精度比秒更精确？
-                无论如何 next_announce 是个整数必须 +1s'''
-                self.client.set_upload_limit(self.to._id, 51200)
-                self.client.set_download_limit(self.to._id, -1)
-                self.to.max_download_speed = -1
+                # 平均速度已降到 50M/s 以下，解除限速，之似乎发现 tracker 计算的时间精度比秒更精确？
+                # 无论如何 next_announce 是个整数必须 +1s
+                self.to.set_upload_limit(51200)
+                self.to.set_download_limit(-1)
                 logger.info(f'Removed download speed limit of torrent {self.to.tid}.')
                 for _ in range(30):
                     sleep(1)
                     try:
-                        if self.client.torrent_status(self.to._id, ['state'])['state'] == 'Seeding':
-                            self.client.set_upload_limit(self.to._id, -1)
-                            self.to.max_upload_speed = -1
+                        if self.to.torrent_status(['state']) == 'Seeding':
+                            self.to.set_upload_limit(-1)
                             return
                     except:
                         pass
@@ -1435,21 +1469,22 @@ class Limit(FunctionBase):
         this_time = self.to.this_time
         this_up = self.to.this_up
         announce_interval = self.to.announce_interval
+
         if 10 < self.to.eta + 10 < self.to.next_announce:
             eta = self.to.eta + 10
         else:
             eta = self.to.next_announce
-        '''eta 代表到下次汇报之前还可以正常上传的时间，
-        如果完成时间在下次周期汇报之前，那么完成时就会汇报，到下次汇报的时间就是到完成的时间，
-        虽然可能通过下载限速延长完成时间，但是在延长的那段时间由于已经出种并且下载速度有限制，
-        通常并不能上传很多，所以可以正常上传的时间就按照完成时间计算'''
+        # eta 代表到下次汇报之前还可以正常上传的时间，
+        # 如果完成时间在下次周期汇报之前，那么完成时就会汇报，到下次汇报的时间就是到完成的时间，
+        # 虽然可能通过下载限速延长完成时间，但是在延长的那段时间由于已经出种并且下载速度有限制，
+        # 通常并不能上传很多，所以可以正常上传的时间就按照完成时间计算
 
         if self.to.max_upload_speed == -1:
             res = 10 * self.to.upload_payload_rate
             if this_up + res + 6291456 * eta > announce_interval * 52428800:
-                '''上次汇报到现在的上传量即将超过一个汇报周期内允许的不超速的最大值，开始上传限速.
-                限速值不要太低，太低会跟不上进度影响之后的上传'''
-                self.client.set_upload_limit(self.to._id, 6144)
+                # 上次汇报到现在的上传量即将超过一个汇报周期内允许的不超速的最大值，开始上传限速.
+                # 限速值不要太低，太低会跟不上进度影响之后的上传
+                self.to.set_upload_limit(6144)
                 logger.warning(f'Begin to limit upload speed of torrent {self.to.tid}. Value ------- {6144}K')
                 self.to._t = time()
         else:
@@ -1458,32 +1493,31 @@ class Limit(FunctionBase):
                 # 在 optimize_announce_time 用到了这个，也可以手动限速到 5120k 等待汇报
                 if this_up / this_time < 52428800 and this_time >= 900:
                     self.re_an()
-                    self.client.set_upload_limit(self.to._id, -1)
+                    self.to.set_upload_limit(-1)
                     logger.info('Average upload speed below 50MiB/s, remove 5120K up-limit')
             elif this_time < 120:  # 已经汇报完，解除上传限速
-                self.client.set_upload_limit(self.to._id, -1)
+                self.to.set_upload_limit(-1)
                 logger.info(f'Removed upload speed limit of torrent {self.to.tid}.')
             elif self.to.upload_payload_rate / 1024 < 2 * self.to.max_upload_speed:
                 max_upload_speed = (announce_interval * 52428800 - this_up) / (eta + 10) / 1024
-                '''计算上传限速值。把 +10 变成 +1，甚至可以限速到 49.999，不过也很容易超（不知道下载用固态会不会好点）'''
+                # 计算上传限速值。把 +10 变成 +1，甚至可以限速到 49.999，不过也很容易超（不知道下载用固态会不会好点）
                 if max_upload_speed > 51200:
-                    self.client.set_upload_limit(self.to._id, -1)
+                    self.to.set_upload_limit(-1)
                     logger.info(f'Removed upload speed limit of torrent {self.to.tid}.')
                 elif max_upload_speed < 0:  # 上传量超过了一个汇报间隔内不超速的最大值
                     if this_up / this_time < 209715200:
-                        if this_time >= 900:
-                            if not ('lft' in self.to and time() - self.to.lft < 900):
-                                self.re_an()
-                                logger.error(f'Failed to limit upload speed limit of torrent {self.to.tid} '
-                                             f'because the upload exceeded')
+                        if self.re_an():
+                            logger.error(f'Failed to limit upload speed limit of torrent {self.to.tid} '
+                                         f'because the upload exceeded')
                     else:
-                        self.client.set_upload_limit(self.to._id, 1)
+                        if self.to.max_upload_speed != 1:
+                            self.to.set_upload_limit(1)
                 elif 8192 < max_upload_speed < 51200 and eta > 180:
                     # 调整限速值减小余量，deluge 上传量一般比限速值低
-                    self.client.set_upload_limit(self.to._id, 51200)
+                    self.to.set_upload_limit(51200)
                     logger.info(f'Set 51200K upload limit for torrent {self.to.tid}')
                 elif 8192 < max_upload_speed < 16384 and eta > 60:
-                    self.client.set_upload_limit(self.to._id, 16384)
+                    self.to.set_upload_limit(16384)
                     logger.info(f'Set 16384K upload limit for torrent {self.to.tid}')
                 else:
                     if announce_interval * 52428800 - this_up > 94371840 and max_upload_speed < 3072:
@@ -1493,7 +1527,7 @@ class Limit(FunctionBase):
                     if self.to.max_upload_speed != max_upload_speed:
                         if max_upload_speed == 5120:
                             max_upload_speed = 5119
-                        self.client.set_upload_limit(self.to._id, max_upload_speed)
+                        self.to.set_upload_limit(max_upload_speed)
                         if max_upload_speed in [3072, 1024]:
                             logger.debug(f'Set {max_upload_speed}K upload limit to torrent {self.to.tid}')
                         elif '_t' not in self.to or '_t' in self.to and time() - self.to._t > 120:
@@ -1514,23 +1548,23 @@ class Limit(FunctionBase):
         this_time = self.to.this_time
         this_up = self.to.this_up
         announce_interval = self.to.announce_interval
-        i = int(300 / self.client.connect_interval) + 1
+
+        i = self.torrent_manager.deque_length
         if 'detail_progress' not in self.to:
             self.to.detail_progress = deque(maxlen=i)
         self.to.detail_progress.append((self.to.total_uploaded, self.to.total_done, time()))
         if len(self.to.detail_progress) != i or this_time < 30 or self.to.max_upload_speed == 5120:
             return
         _list = self.to.detail_progress
-        '''计算 5 分钟内平均下载速度和平均上传速度'''
+        # 计算 5 分钟内平均下载速度和平均上传速度
         upspeed = (_list[i - 1][0] - _list[0][0]) / (_list[i - 1][2] - _list[0][2])
         dlspeed = (_list[i - 1][1] - _list[0][1]) / (_list[i - 1][2] - _list[0][2])
         if upspeed > 52428800 and dlspeed > 0 and _list[0][1] != 0:
-            '''complete_time 是估计的完成时间，
-            perfect_time 是估计的最佳的最后一次汇报时间，
-            earliest 是计算的最早能强制汇报且不超速的时间。
-
-            如果最佳汇报时间可以强制汇报并且不超速，直接汇报就行，实际并非总是如此。
-            有可能最早能汇报的时间在最佳时间点之后，这时候就需要比较在最早能汇报的时间汇报和不强制汇报'''
+            # complete_time 是估计的完成时间，
+            # perfect_time 是估计的最佳的最后一次汇报时间，
+            # earliest 是计算的最早能强制汇报且不超速的时间。
+            # 如果最佳汇报时间可以强制汇报并且不超速，直接汇报就行，实际并非总是如此。
+            # 有可能最早能汇报的时间在最佳时间点之后，这时候就需要比较在最早能汇报的时间汇报和不强制汇报
             complete_time = (self.to.total_size - self.to.total_done) / dlspeed + time()
             perfect_time = complete_time - announce_interval * 52428800 / upspeed
             if this_up / this_time > 52428800:
@@ -1546,8 +1580,7 @@ class Limit(FunctionBase):
                         logger.info(f'Re-announce torrent {self.to.tid}')
                     return
                 if earliest < perfect_time + 60:
-                    self.client.set_upload_limit(self.to._id, 5120)
-                    self.to.max_upload_speed = 5120
+                    self.to.set_upload_limit(5120)
                     logger.info(f'Set 5120K upload limit for torrent {self.to.tid}, waiting for re-announce')
                 else:
                     if time() - this_time > perfect_time:
@@ -1561,32 +1594,28 @@ class Limit(FunctionBase):
                     if _eta2 > 0:
                         default_up += _eta2 * upspeed
                     if earliest_up > default_up:
-                        self.client.set_upload_limit(self.to._id, 5120)
-                        self.to.max_upload_speed = 5120
+                        self.to.set_upload_limit(5120)
                         logger.info(f'Set 5120K upload limit for torrent {self.to.tid}, waiting for re-announce')
 
     def re_an(self):
-        if not ('lft' in self.to and time() - self.to.lft < 900):
+        if not (self.to.lft and time() - self.to.lft < 900):
             self.to.about_to_re_announce = True
             _to = self.to
             if magic:
-                self.magic()
+                asyncio.run(self.magic())
             self.to = _to
             sleep(1)
-            self.client.re_announce(self.to._id)
-            logger.info(f'Re-announce of torrent {self.to.tid}')
-            self.to.lft = time()
-            if 'last_announce_time' in self.to:
-                self.to.last_announce_time = time()
-            self.to.about_to_re_announce = False
+
+            self.to.re_announce()
+            return True
 
     async def update_tid(self):
         """根据 hash 搜索种子 id"""
         url = f'https://u2.dmhy.org/torrents.php?incldead=0&spstate=0' \
               f'&inclbookmarked=0&search={self.to._id}&search_area=5&search_mode=0'
         try:
-            async with aiohttp.ClientSession() as self.torrent_manager.session:
-                text = await self.torrent_manager.rq(url)
+            async with aiohttp.ClientSession() as self.session:
+                text = await self.request(url)
             soup = BeautifulSoup(text.replace('\n', ''), 'lxml')
             table = soup.select('table.torrents')
             if table:
@@ -1603,9 +1632,8 @@ class Limit(FunctionBase):
 
     async def update_upload(self):
         try:
-            async with aiohttp.ClientSession() as self.torrent_manager.session:
-                page = await self.torrent_manager.rq(
-                    f'https://u2.dmhy.org/getusertorrentlistajax.php?userid={uid}&type=leeching')
+            async with aiohttp.ClientSession() as self.session:
+                page = await self.request(f'https://u2.dmhy.org/getusertorrentlistajax.php?userid={uid}&type=leeching')
             table = BeautifulSoup(page.replace('\n', ''), 'lxml').table
             if not table:
                 return
@@ -1621,8 +1649,7 @@ class Limit(FunctionBase):
                         if time() - to.this_time + 2 > to.last_get_time:
                             if to.true_uploaded or to.last_announce_time:
                                 tmp_info.append(to)
-                            if (to.total_uploaded - to.byte(data['uploaded'], 1)
-                                    > 300 * 1024 ** 2 * (to.this_time + 2)):
+                            if to.total_uploaded - to.byte(data['uploaded'], 1) > 300 * 1024 ** 2 * (to.this_time + 2):
                                 to.true_uploaded = data['uploaded']
                                 if to not in tmp_info:
                                     tmp_info.append(to)
@@ -1633,7 +1660,7 @@ class Limit(FunctionBase):
                     if tid in self.instances[0].torrent_manager:
                         self.instances[0].torrent_manager[tid].update(data)
 
-            tasks = [self.torrent_manager.info_from_peerlist(to) for to in tmp_info]
+            tasks = [self.torrent_manager.info_from_peer_list(to) for to in tmp_info]
             await asyncio.gather(*tasks)
         except Exception as e:
             logger.exception(e)
@@ -1745,5 +1772,4 @@ class Main:
 
 if __name__ == '__main__':
     Main().run()
-
 
