@@ -1,6 +1,6 @@
 """
 给下载中的种子放魔法，python3.6 及以上应该能运行
-依赖：pip3 install PyYAML requests bs4 lxml deluge-client loguru func-timeout
+依赖：pip3 install requests bs4 lxml deluge-client loguru func-timeout pytz nest_asyncio aiohttp
 
 支持客户端 deluge，其它的客户端自己去写类吧
 支持配置多个客户端，可以任意停止和重新运行
@@ -494,7 +494,7 @@ class TorrentManager(UserDict):
             for tr in filter(lambda _tr: 'nowrap' in str(_tr), table):
                 if tr.get('bgcolor'):
 
-                    if 'true_uploaded' in to:
+                    if to.true_uploaded:
                         to.true_uploaded = tr.contents[1].string
                         to.true_downloaded = tr.contents[4].string
                         if to.true_uploaded == to.uploaded:
@@ -864,7 +864,7 @@ class FunctionBase:
         self.torrent_manager.update(_id_td)
         self.torrent_manager.last_connect = time()
 
-        if checked and magic:
+        if checked and magic and not self.instances[0].magic_tasks:
             await self.instances[0].magic()
 
 
@@ -880,9 +880,8 @@ class Magic(FunctionBase):
             logger.exception(e)
         else:
             table = BeautifulSoup(page.replace('\n', ''), 'lxml').table
+            tid_td = {}
             if table:
-
-                tid_td = {}
                 for tr in table.contents[1:]:
                     contents = tr.contents
                     tid = int(contents[1].a['href'][15:-6])
@@ -900,36 +899,36 @@ class Magic(FunctionBase):
                         }
                     )
 
-                for tid in list(self.torrent_manager):
-                    tw = self.torrent_manager[tid]
-                    if tid in tid_td:
-                        td = tid_td[tid]
-                        if (td.get('pro_end_time') or 0) > time():
-                            td.promotion = tw.promotion
-                        tw.update(td)
-                        tw.last_get_time = time()
-                        tid_td.pop(tid)
-                    else:
-                        self.torrent_manager.pop(tid)
+            for tid in list(self.torrent_manager):
+                tw = self.torrent_manager[tid]
+                if tid in tid_td:
+                    td = tid_td[tid]
+                    if (td.get('pro_end_time') or 0) > time():
+                        td.promotion = tw.promotion
+                    tw.update(td)
+                    tw.last_get_time = time()
+                    tid_td.pop(tid)
+                else:
+                    self.torrent_manager.pop(tid)
 
-                for tid, td in tid_td.items():  # 新种子
-                    td.uploaded_before = td.uploaded
-                    if tid > min_tid or td.leecher_num > min_leecher_num:
-                        async with aiohttp.ClientSession() as self.session:
-                            detail_page = await self.request(f'https://u2.dmhy.org/details.php?id={tid}&hit=1')
-                        soup = BeautifulSoup(detail_page.replace('\n', ''), 'lxml')
-                        td.tz = self.get_tz(soup)
-                        tab = soup.find('table', {'width': '90%'})
-                        td.date = tab.time.attrs.get('title') or tab.time.text
-                        for tr1 in tab:
-                            if tr1.td.text in [
-                                '种子信息', '種子訊息', 'Torrent Info', 'Информация о торренте',
-                                'Torrent Info', 'Информация о торренте'
-                            ]:  # 这里的空格是 nbsp，一定不要搞错了
-                                td['_id'] = tr1.tr.contents[-2].contents[1].strip()
-                    td.last_get_time = time()
+            for tid, td in tid_td.items():  # 新种子
+                td.uploaded_before = td.uploaded
+                if tid > min_tid or td.leecher_num > min_leecher_num:
+                    async with aiohttp.ClientSession() as self.session:
+                        detail_page = await self.request(f'https://u2.dmhy.org/details.php?id={tid}&hit=1')
+                    soup = BeautifulSoup(detail_page.replace('\n', ''), 'lxml')
+                    td.tz = self.get_tz(soup)
+                    tab = soup.find('table', {'width': '90%'})
+                    td.date = tab.time.attrs.get('title') or tab.time.text
+                    for tr1 in tab:
+                        if tr1.td.text in [
+                            '种子信息', '種子訊息', 'Torrent Info', 'Информация о торренте',
+                            'Torrent Info', 'Информация о торренте'
+                        ]:  # 这里的空格是 nbsp，一定不要搞错了
+                            td['_id'] = tr1.tr.contents[-2].contents[1].strip()
+                td.last_get_time = time()
 
-                self.torrent_manager.update(tid_td)
+            self.torrent_manager.update(tid_td)
 
     def locate_client(self):
         """Detect whether a new torrent is in BT client"""
@@ -1004,6 +1003,7 @@ class Magic(FunctionBase):
             async with aiohttp.ClientSession() as self.session:
                 await asyncio.gather(*self.magic_tasks)
                 self.save_magic_info()
+        self.magic_tasks = []
 
     async def magic_old(self):
         if self.mode != -1:
@@ -1605,8 +1605,7 @@ class Limit(FunctionBase):
 
     async def update_tid(self):
         """根据 hash 搜索种子 id"""
-        url = f'https://u2.dmhy.org/torrents.php?incldead=0&spstate=0' \
-              f'&inclbookmarked=0&search={self.to._id}&search_area=5&search_mode=0'
+        url = f'https://u2.dmhy.org/torrents.php?search={self.to._id}&search_area=5'
         try:
             async with aiohttp.ClientSession() as self.session:
                 text = await self.request(url)
