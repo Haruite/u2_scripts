@@ -300,11 +300,17 @@ class BTClient(metaclass=ABCMeta):
 
     @abstractmethod
     def downloading_torrents_info(self, keys: list) -> Dict[str, Dict[str, Any]]:
-        """下载中的种子信息"""
+        """下载中的种子信息
+        返回以种子 hash 为 key (小写), 种子信息(见 torrent_status 返回值)为值的字典
+        """
 
     @abstractmethod
     def torrent_status(self, _id: str, keys: list) -> Dict[str, Any]:
-        """单个种子信息"""
+        """单个种子信息
+        脚本是以 deluge 为基础写的，如果要使用其他客户端编写自定义 BTClient 继承类，
+        则每个 status_keys 对应的信息必须和 deluge 相同，否则脚本功能不能正常使用
+        deluge 返回示例见 Deluge 类的方法实现
+        """
 
 
 class Deluge(BTClient, LocalDelugeRPCClient):  # 主要是把 call 重写了一下，因为 deluge 太容易失联了
@@ -352,10 +358,20 @@ class Deluge(BTClient, LocalDelugeRPCClient):  # 主要是把 call 重写了一�
         return self.core.get_torrents_status({'state': 'Downloading'}, keys)
 
     def torrent_status(self, _id, keys):
+        """Deluge 返回示例
+        {'name': 'MEDAKA BOX ABNORMAL', 'total_size': 60299096372, 'download_payload_rate': 10176348,
+        'time_added': 1667313753, 'max_upload_speed': -1, 'upload_payload_rate': 429508, 'max_download_speed': -1,
+        'num_seeds': 2, 'total_done': 22196281185, 'tracker': 'https://daydream.dmhy.best/announce?secure=',
+        'next_announce': 928, 'eta': 3744, 'total_uploaded': 7951417344}
+        种子下载速度为 0 时 eta 为 0
+        """
         return self.core.get_torrent_status(_id, keys)
 
 
 class TorrentDict(UserDict):
+    """包含种子信息的字典
+    item 方式书写不方便，可以通过属性访问字典的值
+    """
     def __repr__(self):
         return f'{self.__class__.__name__}({self.data})'
 
@@ -419,6 +435,13 @@ class TorrentDict(UserDict):
 
 
 class TorrentManager(UserDict):
+    """存放每个 Run 实例的所有种子信息
+    对应第一个实例: 键为种子 id, 值为包含种子信息的 TorrentDict
+                 字典主要是 get_info_from_web 获取的信息
+    对应第其他实例: 键为种子 hash (脚本中一般用 _id 表示), 值为包含种子信息的 TorrentDict
+                 字典为 torrent_status 返回值，以及 get_info_from_web 信息合并以及其他一些信息
+    当使用 __getitem__ 或 values 或 items 访问值时会生成 TorrentWrapper 对象
+    """
     instances = []
     requests_args = {
         'headers': {'user-agent': 'U2-Auto-Magic'},
@@ -436,7 +459,7 @@ class TorrentManager(UserDict):
         self.client = client
         self.ana = accurate_next_announce
         self.ana_updated = False
-        self.last_connect = time()
+        self.last_connect = 0
         self.session = None
         self.deque_length = None
 
@@ -569,7 +592,7 @@ class TorrentWrapper:
     @property
     def min_time(self) -> Union[int, float]:
         li = min(
-            max(time() - self.manager.last_connect, self.manager.client.connect_interval),
+            max(time() - (self.manager.last_connect or time()), self.manager.client.connect_interval),
             6 * self.manager.client.connect_interval
         )
         return min_secs_before_announce / self.manager.client.connect_interval * li
@@ -815,14 +838,18 @@ class FunctionBase:
         """读取客户端种子的状态，并且与已知信息合并
         由于客户端只有种子的 hash 信息，而放魔法需要知道种子 id
         当然可以直接在网站搜索 hash，但只有新种才需要，为了避免浪费服务器资源
-        采用对比的方式合并种子信息，旧种子的 id 将会被设置为 -1"""
-
+        采用对比的方式合并种子信息，旧种子的 id 将会被设置为 -1
+        """
         _id_td = {
             _id: TorrentDict(dic) for _id, dic in self.dl_to_info().items()
             if dic.get('tracker') and 'daydream.dmhy.best' in dic['tracker']
         }
         _id_tw_0 = {tw._id: tw for tw in self.instances[0].torrent_manager.values() if tw._id}
         checked = False  # 用来标志是否访问了下载页面，此函数内最多访问一次
+        update_upload = False
+        if (self.torrent_manager.last_connect < self.instances[0].torrent_manager.last_connect
+                or not self.torrent_manager.last_connect):
+            update_upload = True
 
         for _id in list(self.torrent_manager):  # 上次连接客户端时的种子信息
             tw = self.torrent_manager[_id]
@@ -830,10 +857,11 @@ class FunctionBase:
                 tw.update(_id_td[_id])
                 if not tw.first_seed_time and tw.total_done > 0:
                     tw.first_seed_time = time()
-                if _id in _id_tw_0:
-                    tw.update(_id_tw_0[_id])
-                elif tw.tid in self.instances[0].torrent_manager:
-                    tw.update(self.instances[0].torrent_manager[tw.tid])
+                if update_upload:
+                    if _id in _id_tw_0:
+                        tw.update(_id_tw_0[_id])
+                    elif tw.tid in self.instances[0].torrent_manager:
+                        tw.update(self.instances[0].torrent_manager[tw.tid])
                 _id_td.pop(_id)
             else:  # 本次连接种子不在下载
                 self.torrent_manager.pop(_id)
@@ -863,6 +891,8 @@ class FunctionBase:
 
         self.torrent_manager.update(_id_td)
         self.torrent_manager.last_connect = time()
+        if update_upload:
+            self.instances[0].torrent_manager.last_connect = self.torrent_manager.last_connect
 
         if checked and magic and not self.instances[0].magic_tasks:
             await self.instances[0].magic()
@@ -921,14 +951,15 @@ class Magic(FunctionBase):
                     tab = soup.find('table', {'width': '90%'})
                     td.date = tab.time.attrs.get('title') or tab.time.text
                     for tr1 in tab:
-                        if tr1.td.text in [
+                        if tr.td.text in [
                             '种子信息', '種子訊息', 'Torrent Info', 'Информация о торренте',
                             'Torrent Info', 'Информация о торренте'
                         ]:  # 这里的空格是 nbsp，一定不要搞错了
-                            td['_id'] = tr1.tr.contents[-2].contents[1].strip()
+                            td['_id'] = tr.tr.contents[-2].contents[1].strip()
                 td.last_get_time = time()
 
             self.torrent_manager.update(tid_td)
+            self.torrent_manager.last_connect = time()
 
     def locate_client(self):
         """Detect whether a new torrent is in BT client"""
@@ -1640,12 +1671,10 @@ class Limit(FunctionBase):
 
                     if to.date and to.last_get_time:
                         if time() - to.this_time + 2 > to.last_get_time:
-                            if to.true_uploaded or to.last_announce_time:
-                                tmp_info.append(to)
                             if to.total_uploaded - to.byte(data['uploaded'], 1) > 300 * 1024 ** 2 * (to.this_time + 2):
                                 to.true_uploaded = data['uploaded']
-                                if to not in tmp_info:
-                                    tmp_info.append(to)
+                            if to.true_uploaded or to.last_announce_time:
+                                tmp_info.append(to)
                             if data['uploaded'].split(' ')[0] != '0':
                                 self.print(f"Last announce upload of torrent {tid} is {data['uploaded']}")
 
