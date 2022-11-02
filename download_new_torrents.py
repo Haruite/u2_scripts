@@ -86,7 +86,7 @@ def get_url(url):
 class U2Meta(type):
     detail_key_dict = {'filename': ['下载', '下載', 'Download', 'Скачивание'],
                        'author': ['发布人', '發佈人', '發布人', 'Uploader', 'Загрузил'],
-                       'hash': ['种子信息', '種子訊息', 'Torrent Info', 'Информация о торренте'],
+                       'hash': ['种子信息', '種子訊息', 'Torrent Info', 'Информация о торренте'],
                        'description': ['描述', '描述', 'Description', 'Описание'],
                        'progress': ['活力度', 'Health', 'Целостность'],
                        'geoips': ['同伴', 'Peers', 'Всего Участников']
