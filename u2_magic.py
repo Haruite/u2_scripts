@@ -897,10 +897,6 @@ class FunctionBase:
         if checked and magic and not self.instances[0].magic_tasks:
             await self.instances[0].magic()
 
-
-class Magic(FunctionBase):
-    magic_info: MagicInfo = None
-
     async def get_info_from_web(self):
         try:
             async with aiohttp.ClientSession() as self.session:
@@ -950,7 +946,7 @@ class Magic(FunctionBase):
                     td.tz = self.get_tz(soup)
                     tab = soup.find('table', {'width': '90%'})
                     td.date = tab.time.attrs.get('title') or tab.time.text
-                    for tr1 in tab:
+                    for tr in tab:
                         if tr.td.text in [
                             '种子信息', '種子訊息', 'Torrent Info', 'Информация о торренте',
                             'Torrent Info', 'Информация о торренте'
@@ -960,6 +956,10 @@ class Magic(FunctionBase):
 
             self.torrent_manager.update(tid_td)
             self.torrent_manager.last_connect = time()
+
+
+class Magic(FunctionBase):
+    magic_info: MagicInfo = None
 
     def locate_client(self):
         """Detect whether a new torrent is in BT client"""
@@ -1395,7 +1395,8 @@ class Limit(FunctionBase):
                     logger.debug(f'Try to find tid of {self.to._id} --- ')
                     try:
                         await self.update_tid()
-                        await self.update_upload()
+                        if not magic:
+                            await self.update_upload()
                         self.to.ex = True
                         continue
                     except:
@@ -1647,6 +1648,8 @@ class Limit(FunctionBase):
                 date = table[0].contents[1].contents[3].time
                 self.to.date = date.get('title') or date.get_text(' ')
                 self.to.tz = self.get_tz(soup)
+                if self.to.tid in self.instances[0].torrent_manager:
+                    self.to.update(self.instances[0].torrent_manager[self.to.tid])
                 logger.debug(f'{self.to._id} --> {self.to.tid}')
             else:
                 self.to['404'] = True
@@ -1662,26 +1665,21 @@ class Limit(FunctionBase):
             if not table:
                 return
             tmp_info = []
+            tid_tw = {tw.tid: tw for tw in self.torrent_manager.values() if tw.tid not in [-1, None]}
             for tr in table.contents[1:]:
                 tid = int(tr.contents[1].a['href'][15:-6])
-                for to in self.torrent_manager.values():
-                    if to.tid != tid:
-                        continue
+                if tid in tid_tw:
+                    tw = tid_tw[tid]
                     data = {'uploaded': tr.contents[6].get_text(' '), 'last_get_time': time()}
-
-                    if to.date and to.last_get_time:
-                        if time() - to.this_time + 2 > to.last_get_time:
-                            if to.total_uploaded - to.byte(data['uploaded'], 1) > 300 * 1024 ** 2 * (to.this_time + 2):
-                                to.true_uploaded = data['uploaded']
-                            if to.true_uploaded or to.last_announce_time:
-                                tmp_info.append(to)
+                    if tw.date and tw.last_get_time:
+                        if time() - tw.this_time + 2 > tw.last_get_time:
+                            if tw.total_uploaded - tw.byte(data['uploaded'], 1) > 300 * 1024 ** 2 * (tw.this_time + 2):
+                                tw.true_uploaded = data['uploaded']
+                            if tw.true_uploaded or tw.last_announce_time:
+                                tmp_info.append(tw)
                             if data['uploaded'].split(' ')[0] != '0':
                                 self.print(f"Last announce upload of torrent {tid} is {data['uploaded']}")
-
-                    to.update(data)
-                    if tid in self.instances[0].torrent_manager:
-                        self.instances[0].torrent_manager[tid].update(data)
-
+                    tw.update(data)
             tasks = [self.torrent_manager.info_from_peer_list(to) for to in tmp_info]
             async with aiohttp.ClientSession() as self.session:
                 await asyncio.gather(*tasks)
@@ -1741,6 +1739,8 @@ class Main:
                     self.cls.magic_info = eval(f.read())
                 except:
                     pass
+        if not self.cls.magic_info:
+            self.cls.magic_info = MagicInfo([])
 
         if os.path.exists(torrents_info_path):
             with open(torrents_info_path, 'r', encoding='utf-8') as f:
