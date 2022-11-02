@@ -815,6 +815,27 @@ class FunctionBase:
         pre_suf = [['时区', '，点击修改。'], ['時區', '，點擊修改。'], ['Current timezone is ', ', click to change.']]
         return [tz_info[len(pre):-len(suf)].strip() for pre, suf in pre_suf if tz_info.startswith(pre)][0]
 
+    @staticmethod
+    @lru_cache(maxsize=max_cache_size)
+    def get_pro(tr: Tag) -> List[Union[int, float]]:
+        """
+        tr: 兼容三种 tr: 种子页每行 tr，下载页每行 tr，详情页显示优惠信息的行 tr
+        返回上传下载比率，如果控制面板关掉了优惠显示，返回的结果可能与实际不符，会在检查魔法是否重复的时候修正
+        """
+        pro = {'ur': 1.0, 'dr': 1.0}
+        pro_dict = {'free': {'dr': 0.0}, 'twoup': {'ur': 2.0}, 'halfdown': {'dr': 0.5}, 'thirtypercent': {'dr': 0.3}}
+        if tr.get('class'):  # 高亮显示
+            [pro.update(data) for key, data in pro_dict.items() if key in tr['class'][0]]
+        td = tr.tr and tr.select('tr')[1].td or tr.select('td')[1]
+        pro_dict_1 = {'free': {'dr': 0.0}, '2up': {'ur': 2.0}, '50pct': {'dr': 0.5}, '30pct': {'dr': 0.3}, 'custom': {}}
+        for img in td.select('img') or []:  # 图标显示
+            if not [pro.update(data) for key, data in pro_dict_1.items() if key in img['class'][0]]:
+                pro[{'arrowup': 'ur', 'arrowdown': 'dr'}[img['class'][0]]] = float(img.next.text[:-1].replace(',', '.'))
+        for span in td.select('span') or []:  # 标记显示
+            [pro.update(data) for key, data in pro_dict.items() if
+             key in (span.get('class') and span['class'][0] or '')]
+        return list(pro.values())
+
     @classmethod
     def save_torrents_info(cls):
         TorrentManager.save_data()
@@ -988,27 +1009,6 @@ class Magic(FunctionBase):
         if all_connected:  # 如果有些客户端连接不上，可能有些种子不能确定是否客户端
             for tw in _id_tw.values():
                 tw.in_client = False
-
-    @staticmethod
-    @lru_cache(maxsize=max_cache_size)
-    def get_pro(tr: Tag) -> List[Union[int, float]]:
-        """
-        tr: 兼容三种 tr: 种子页每行 tr，下载页每行 tr，详情页显示优惠信息的行 tr
-        返回上传下载比率，如果控制面板关掉了优惠显示，返回的结果可能与实际不符，会在检查魔法是否重复的时候修正
-        """
-        pro = {'ur': 1.0, 'dr': 1.0}
-        pro_dict = {'free': {'dr': 0.0}, 'twoup': {'ur': 2.0}, 'halfdown': {'dr': 0.5}, 'thirtypercent': {'dr': 0.3}}
-        if tr.get('class'):  # 高亮显示
-            [pro.update(data) for key, data in pro_dict.items() if key in tr['class'][0]]
-        td = tr.tr and tr.select('tr')[1].td or tr.select('td')[1]
-        pro_dict_1 = {'free': {'dr': 0.0}, '2up': {'ur': 2.0}, '50pct': {'dr': 0.5}, '30pct': {'dr': 0.3}, 'custom': {}}
-        for img in td.select('img') or []:  # 图标显示
-            if not [pro.update(data) for key, data in pro_dict_1.items() if key in img['class'][0]]:
-                pro[{'arrowup': 'ur', 'arrowdown': 'dr'}[img['class'][0]]] = float(img.next.text[:-1].replace(',', '.'))
-        for span in td.select('span') or []:  # 标记显示
-            [pro.update(data) for key, data in pro_dict.items() if
-             key in (span.get('class') and span['class'][0] or '')]
-        return list(pro.values())
 
     @property
     def mode(self):
@@ -1395,8 +1395,7 @@ class Limit(FunctionBase):
                     logger.debug(f'Try to find tid of {self.to._id} --- ')
                     try:
                         await self.update_tid()
-                        if not magic:
-                            await self.update_upload()
+                        await self.update_upload()
                         self.to.ex = True
                         continue
                     except:
