@@ -1,6 +1,6 @@
 """
-给下载中的种子放魔法，python3.6 及以上应该能运行
-依赖：pip3 install requests bs4 lxml deluge-client loguru func-timeout pytz nest_asyncio aiohttp
+给下载中的种子放魔法，python3.7 及以上应该能运行
+依赖：pip3 install requests bs4 lxml deluge-client loguru func-timeout pytz nest_asyncio aiohttp paramiko
 
 支持客户端 deluge，其它的客户端自己去写类吧
 支持配置多个客户端，可以任意停止和重新运行
@@ -12,7 +12,7 @@
 对下载的种子进行限速，防止上传失效
 
 用法：
-按 yaml 语法修改 config，填上必填信息，按注释说明修改其它信息
+修改配置信息，填上必填信息，按注释说明修改其它信息
 至少应该填上 uid 和 cookie，默认为只给旧种放魔法
 如果要给所有下载的种子放 free，将 magic_new 改为 True，default_mode 改为 4
 以及删掉多余的 min_download_reduced 和 max_uc_peer_gb_reduced
@@ -448,7 +448,7 @@ class TorrentManager(UserDict):
         'cookies': cookies, 'proxy': proxy
     }
 
-    def __init__(self, dic=None, client: BTClient = None, accurate_next_announce=True):
+    def __init__(self, dic=None, client: Union[Deluge, None] = None, accurate_next_announce=True):
         for instance in self.instances:
             if instance.client and client:
                 if instance.client.host == client.host and instance.client.port == client.port:
@@ -960,6 +960,7 @@ class FunctionBase:
 
             for tid, td in tid_td.items():  # 新种子
                 td.uploaded_before = td.uploaded
+                td.add_time = time()
                 if tid > min_tid or td.leecher_num > min_leecher_num:
                     async with aiohttp.ClientSession() as self.session:
                         detail_page = await self.request(f'https://u2.dmhy.org/details.php?id={tid}&hit=1')
@@ -1252,7 +1253,7 @@ class Magic(FunctionBase):
             return True
         if 'total_size' not in self.to:
             if 'in_client' not in self.to and self.to.is_new:
-                if self.to.delta > self.to.size_byte / 55 / 1024 ** 2:
+                if time() - self.to.add_time > self.to.size_byte / 55 / 1024 ** 2:
                     return True
                 return
             if self.to.seeder_num > 0:
