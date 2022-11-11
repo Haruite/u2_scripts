@@ -1,8 +1,8 @@
 """
 给下载中的种子放魔法，python3.7 及以上应该能运行
-依赖：pip3 install requests bs4 lxml deluge-client loguru func-timeout pytz nest_asyncio aiohttp paramiko
+依赖：pip3 install requests bs4 lxml deluge-client loguru func-timeout pytz nest_asyncio aiohttp paramiko qbittorrent-api
 
-支持客户端 deluge，其它的客户端自己去写类吧
+支持客户端 deluge 和 qbittorrent，其它的客户端自己去写类吧
 支持配置多个客户端，可以任意停止和重新运行
 检查重复，检查 uc 使用量，尽可能减少爬网页的次数
 放魔法区分新种和旧种，因为新种魔法使用量太多，支持自定义魔法规则
@@ -39,10 +39,12 @@ import os
 import re
 import sys
 import subprocess
+
 import aiohttp
 import nest_asyncio
 import paramiko
 import pytz
+import qbittorrentapi
 
 from functools import reduce, lru_cache
 from datetime import datetime
@@ -56,7 +58,7 @@ from abc import ABCMeta, abstractmethod
 from func_timeout import func_set_timeout, FunctionTimedOut
 from deluge_client import LocalDelugeRPCClient, FailedToReconnectException
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
+from qbittorrentapi import APIConnectionError, HTTPError
 
 # ***********************************************必填配置，不填不能运行*****************************************************
 uid = 50096  # type: Union[int, str]
@@ -73,13 +75,21 @@ magic_new = True  # type: Any
 '只有为真才会给新种施加魔法'
 limit = True  # type: Any
 '是否开启限速'
-clients_info = ({'type': 'deluge',  # 客户端类型，目前只支持 deluge
+clients_info = ({'type': 'deluge',  # 'de', 'Deluge', 'deluge'
                  'host': '127.0.0.1',  # 主机 ip 地址
                  'port': 58846,  # daemon 端口
                  'username': '',  # 本地一般不用填用户名和密码，查找路径是 ~/.config/deluge/auth
                  'password': '',
                  'connect_interval': 1.5,  # 从客户端读取种子状态的时间间隔
                  'min_announce_interval': 300  # 默认值 300，如果安装了 ltconfig 会读取设置并以 ltconfig 为准
+                 },
+                {'type': 'qbittorrent',  # 'qb', 'QB', 'qbittorrent', 'qBittorrent'
+                 'host': 'http://127.0.0.1',  # 主机，最好加上 http
+                 'port': 8080,  # webui 端口
+                 'username': '',  # web 用户名
+                 'password': '',  # web 密码
+                 'connect_interval': 1,  # 从客户端读取种子状态的时间间隔
+                 'min_announce_interval': 300  # 默认值 300
                  },
                 )  # type: Tuple[Dict[str, Union[str, int, float]], ...]
 '客户端配置'
@@ -184,7 +194,7 @@ torrents_info_path = f'{os.path.splitext(__file__)[0]}.torrents_info'  # type: s
 '种子信息保存路径'
 enable_debug_output = True  # type: Any
 '为真时会输出 debug 级别日志，否则只输出 info 级别日志'
-local_hosts = '127.0.0.1',  # type: Tuple[str, ...]
+local_hosts = '127.0.0.1', 'http://127.0.0.1',  # type: Tuple[str, ...]
 '本地客户端 ip'
 max_cache_size = 256  # type: int
 'lru_cache 的 max_size'
@@ -194,6 +204,7 @@ max_cache_size = 256  # type: int
 
 class BTClient(metaclass=ABCMeta):
     """BT 客户端基类"""
+    instances = []
     local_clients = []
     status_keys = ['download_payload_rate', 'eta', 'max_download_speed', 'max_upload_speed',
                    'name', 'next_announce', 'num_seeds', 'total_done', 'total_uploaded',
@@ -202,6 +213,8 @@ class BTClient(metaclass=ABCMeta):
 
     def __init__(self, host, port, min_announce_interval, connect_interval):
         self.host = host
+        match = re.findall(r'https?://(.*)', self.host)
+        self.ip = match[0] if match else self.host
         self.port = port
         self.min_announce_interval = min_announce_interval
         self.connect_interval = connect_interval
@@ -222,6 +235,7 @@ class BTClient(metaclass=ABCMeta):
                 self.sshd.set_missing_host_key_policy(paramiko.AutoAddPolicy())
                 self.run_cmd(f'tc qdisc del dev {self.device} root >> /dev/null 2>&1')
 
+        self.instances.append(self)
         if host in local_hosts:
             self.local_clients.append(self)
 
@@ -254,9 +268,9 @@ class BTClient(metaclass=ABCMeta):
                 return self.on_fail_call(method, *args, **kwargs)
 
     def on_fail_call(self, method, *args, **kwargs):
-        while True:
+        for _ in range(100):
             try:
-                if self.tc_rate >= self.min_rate:
+                if self.tc_rate >= self.min_rate and not self.limit_on_host():
                     self.run_cmd(f'tc qdisc del dev {self.device} root >> /dev/null 2>&1')
                     cmd = f'tc qdisc add dev {self.device} root handle 1: tbf rate {self.tc_rate:.2f}mbit ' \
                           f'burst {self.tc_rate / 10:.2f}mbit latency 1s >> /dev/null 2>&1'
@@ -274,12 +288,20 @@ class BTClient(metaclass=ABCMeta):
                     logger.error(f'Still cannot access the deluge instance on {self.host}')
             except BaseException as e:
                 logger.exception(e)
+        self.run_cmd(f'tc qdisc del dev {self.device} root >> /dev/null 2>&1')
+
+    def limit_on_host(self):
+        for client in self.instances:
+            if self.host in local_hosts and client.host in local_hosts:
+                return True
+            if self.ip == client.ip:
+                return True
 
     def run_cmd(self, cmd):
         if self.host in local_hosts:
             subprocess.Popen(cmd, shell=True)
         else:
-            self.sshd.connect(hostname=self.host, username='root', password=self.passwd)
+            self.sshd.connect(hostname=self.ip, username='root', password=self.passwd)
             self.sshd.exec_command(cmd)
 
     @abstractmethod
@@ -288,11 +310,17 @@ class BTClient(metaclass=ABCMeta):
 
     @abstractmethod
     def set_upload_limit(self, _id: str, rate: Union[int, float]):
-        """设置上传限速"""
+        """设置上传限速
+        :param _id: 种子 hash (小写)
+        :param rate: 限速值 (单位: KiB/s)
+        """
 
     @abstractmethod
     def set_download_limit(self, _id: str, rate: Union[int, float]):
-        """设置下载限速"""
+        """设置下载限速
+        :param _id: 种子 hash (小写)
+        :param rate: 限速值 (单位: KiB/s)
+        """
 
     @abstractmethod
     def re_announce(self, _id):
@@ -328,6 +356,15 @@ class Deluge(BTClient, LocalDelugeRPCClient):  # 主要是把 call 重写了一�
                  ):
         super(Deluge, self).__init__(host, port, min_announce_interval, connect_interval)
         super(BTClient, self).__init__(host, port, username, password, decode_utf8, automatic_reconnect)
+        try:
+            min_announce_interval = self.ltconfig.get_settings()['min_announce_interval']
+            if min_announce_interval != self.min_announce_interval:
+                logger.warning(
+                    f'Min announce interval changed from {self.min_announce_interval} to {min_announce_interval}'
+                )
+                self.min_announce_interval = min_announce_interval
+        except:
+            pass
 
     def call_retry(self, method, *args, **kwargs):
         if not self.connected and method != 'daemon.login':
@@ -366,6 +403,110 @@ class Deluge(BTClient, LocalDelugeRPCClient):  # 主要是把 call 重写了一�
         种子下载速度为 0 时 eta 为 0
         """
         return self.core.get_torrent_status(_id, keys)
+
+
+class QBittorrent(BTClient, qbittorrentapi.Client):
+    def __init__(self,
+                 host: str = 'http://127.0.0.1',
+                 port: int = 8080,
+                 username: str = '',
+                 password: str = '',
+                 min_announce_interval: int = 300,
+                 connect_interval: int = 1.5,
+                 **kwargs
+                 ):
+        super(self.__class__, self).__init__(host, port, min_announce_interval, connect_interval)
+        super(BTClient, self).__init__(
+            host=host,
+            port=port,
+            username=username,
+            password=password,
+            REQUESTS_ARGS={'timeout': 20},
+            FORCE_SCHEME_FROM_HOST=True,
+            VERIFY_WEBUI_CERTIFICATE=True if 'verify' not in kwargs else kwargs['verify']
+        )
+
+        self.connected = False
+        self.status_funcs = self.create_status_funcs()
+
+    def auth_log_in(self, username=None, password=None, **kwargs):
+        super(BTClient, self).auth_log_in(username, password, **kwargs)
+        self.connected = True
+        logger.info(f'Connected to qbittorrent client on {self.host}')
+
+    def create_status_funcs(self):
+        return {
+            'download_payload_rate': lambda to: to.dlspeed,
+            'eta': lambda to: 0 if to.eta == 8640000 else to.eta,
+            'max_download_speed': lambda to: -1 if to.dl_limit <= 0 else to.dl_limit / 1024,
+            'max_upload_speed': lambda to: -1 if to.up_limit <= 0 else to.up_limit / 1024,
+            'name': lambda to: to.name,
+            'next_announce': lambda to: self.call('torrents_properties', to.hash).reannounce,
+            'num_seeds': lambda to: to.num_complete,
+            'peers': lambda to: tuple(
+                {
+                    'client': peer.client,
+                    'country': peer.country,
+                    'down_speed': peer.dl_speed,
+                    'ip': ip_port,
+                    'progress': peer.progress,
+                    'seed': 0 if peer.progress < 1 else 1,
+                    'up_speed': peer.up_speed,
+                }
+                for ip_port, peer in self.call('sync_torrent_peers', to.hash).peers.items()
+            ),
+            'state': lambda to: {
+                                    'uploading': 'Seeding',
+                                    'stalledUP': 'Seeding',
+                                    'downloading': 'Downloading',
+                                    'stalledDL': 'Downloading',
+                                }.get(to.state) or to.state,
+            'total_done': lambda to: to.total_size - to.amount_left,
+            'total_uploaded': lambda to: to.uploaded,
+            'total_size': lambda to: to.total_size,
+            'tracker': lambda to: to.tracker,
+            'time_added': lambda to: to.added_on,
+            'upload_payload_rate': lambda to: to.upspeed,
+        }
+
+    def call_retry(self, method, *args, **kwargs):
+        try:
+            return self.__getattribute__(method)(*args, **kwargs, _retries=5)
+        except HTTPError as e:
+            logger.error(f'Failed to connect to qbittorrent on {self.host}:{self.port} due to http error: {e}')
+        except APIConnectionError as e:
+            logger.error(f'Failed to connect to qbittorrent on {self.host}:{self.port} due to '
+                         f'qbittorrentapi.exceptions.APIConnectionError:  {e}')
+
+    def create_torrent_status(self, torrent: qbittorrentapi._attrdict.AttrDict, keys: List[str]):
+        return {key: self.status_funcs[key](torrent) for key in keys}
+
+    def re_announce(self, _id):
+        self.call('torrents_reannounce', torrent_hashes=_id)
+
+    def torrent_status(self, _id, keys):
+        return self.create_torrent_status(self.call('torrents_info', torrent_hashes=_id)[0], keys)
+
+    def set_upload_limit(self, _id, rate):
+        up_limit = -1 if rate < 0 else int(rate * 1024)
+        self.call('torrents_set_upload_limit', limit=up_limit, torrent_hashes=_id)
+
+    def set_download_limit(self, _id, rate):
+        dl_limit = -1 if rate < 0 else int(rate * 1024)
+        self.call('torrents_set_download_limit', limit=dl_limit, torrent_hashes=_id)
+
+    def downloading_torrents_info(self, keys):
+        torrents = self.call('torrents_info', status_filter='downloading')
+        if not torrents:
+            return {}
+        if set(keys) & {'peers', 'next_announce'}:
+            with ThreadPoolExecutor(max_workers=len(torrents)) as executor:
+                futures = {
+                    executor.submit(self.create_torrent_status, torrent, keys): torrent.hash for torrent in torrents
+                }
+                return {futures[future]: future.result() for future in as_completed(futures)}
+        else:
+            return {torrent.hash: self.create_torrent_status(torrent, keys) for torrent in torrents}
 
 
 class TorrentDict(UserDict):
@@ -448,7 +589,7 @@ class TorrentManager(UserDict):
         'cookies': cookies, 'proxy': proxy
     }
 
-    def __init__(self, dic=None, client: Union[Deluge, None] = None, accurate_next_announce=True):
+    def __init__(self, dic=None, client: Union[Deluge, QBittorrent, None] = None, accurate_next_announce=True):
         for instance in self.instances:
             if instance.client and client:
                 if instance.client.host == client.host and instance.client.port == client.port:
@@ -777,7 +918,7 @@ class MagicInfo(UserList):
 class FunctionBase:
     instances = []
 
-    def __init__(self, client: Union[Deluge, None]):
+    def __init__(self, client: Union[Deluge, QBittorrent, None]):
         self.client = client
         self.instances.append(self)
         n = self.instances.index(self)
@@ -1757,11 +1898,11 @@ class Main:
                     client_type = client_info['type']
                     del client_info['type']
                     if client_type in ['de', 'Deluge', 'deluge']:
-                        client_info.setdefault('decode_utf8', True)
-                        client_info.setdefault('connect_interval', 5)
-                        client_info.setdefault('min_announce_interval', 300)
                         self.cls(Deluge(**client_info))
                         self.cls.instances[0].clients.append(Deluge(**client_info))
+                    elif client_type in ['qb', 'QB', 'qbittorrent', 'qBittorrent']:
+                        self.cls(QBittorrent(**client_info))
+                        self.cls.instances[0].clients.append(QBittorrent(**client_info))
 
         logger.remove(handler_id=0)
         level = 'DEBUG' if enable_debug_output else 'INFO'
