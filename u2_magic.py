@@ -281,7 +281,7 @@ class BTClient(metaclass=ABCMeta):
                     logger.warning(f'Set the upload limit for {self.device} on {self.host} to {self.tc_rate:.2f}mbps')
                     self.tc_rate = self.tc_rate / 2
                 try:
-                    res = self.call(method, *args, **kwargs)
+                    res = self.call_retry(method, *args, **kwargs)
                     self.io_busy = False
                     return res
                 except:
@@ -1880,7 +1880,7 @@ class Main:
                     self.cls.magic_info = eval(f.read())
                 except:
                     pass
-        if not self.cls.magic_info:
+        if self.cls.magic_info is None:
             self.cls.magic_info = MagicInfo([])
 
         if os.path.exists(torrents_info_path):
