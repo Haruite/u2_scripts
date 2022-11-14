@@ -268,7 +268,7 @@ class BTClient(metaclass=ABCMeta):
                 return self.on_fail_call(method, *args, **kwargs)
 
     def on_fail_call(self, method, *args, **kwargs):
-        for _ in range(100):
+        for _ in range(20):
             try:
                 if self.tc_rate >= self.min_rate and not self.limit_on_host():
                     self.run_cmd(f'tc qdisc del dev {self.device} root >> /dev/null 2>&1')
@@ -327,13 +327,13 @@ class BTClient(metaclass=ABCMeta):
         """强制重新汇报"""
 
     @abstractmethod
-    def downloading_torrents_info(self, keys: list) -> Dict[str, Dict[str, Any]]:
+    def downloading_torrents_info(self, keys: List[str]) -> Dict[str, Dict[str, Any]]:
         """下载中的种子信息
         返回以种子 hash 为 key (小写), 种子信息(见 torrent_status 返回值)为值的字典
         """
 
     @abstractmethod
-    def torrent_status(self, _id: str, keys: list) -> Dict[str, Any]:
+    def torrent_status(self, _id: str, keys: List[str]) -> Dict[str, Any]:
         """单个种子信息
         脚本是以 deluge 为基础写的，如果要使用其他客户端编写自定义 BTClient 继承类，
         则每个 status_keys 对应的信息必须和 deluge 相同，否则脚本功能不能正常使用
@@ -368,7 +368,7 @@ class Deluge(BTClient, LocalDelugeRPCClient):  # 主要是把 call 重写了一�
 
     def call_retry(self, method, *args, **kwargs):
         if not self.connected and method != 'daemon.login':
-            for i in range(1):
+            for i in range(5):
                 try:
                     self.reconnect()
                     logger.info(f'Connected to deluge client on {self.host}')
