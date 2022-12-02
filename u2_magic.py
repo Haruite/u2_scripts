@@ -769,6 +769,8 @@ class TorrentWrapper:
     @property
     def next_announce(self):
         next_announce = self.torrent_dict.next_announce
+        if next_announce > self.announce_interval:
+            next_announce = self.announce_interval
 
         if not self.manager.ana_updated:  # 不确定 next_announce 是否有问题，继续观察
             if self.tid and self.date:
