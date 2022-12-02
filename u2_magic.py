@@ -661,12 +661,22 @@ class TorrentManager(UserDict):
                     if to.true_uploaded:
                         to.true_uploaded = tr.contents[1].string
                         to.true_downloaded = tr.contents[4].string
-                        if to.true_uploaded == to.uploaded:
+                        actual_uploaded_byte = to.true_uploaded_byte + to.uploaded_before_byte
+                        if abs(actual_uploaded_byte - to.uploaded_byte) < 1024 ** 3:
                             del to.true_uploaded
                             del to.true_downloaded
                         else:
                             logger.debug(f'Some upload of torrent {to.tid} was not calculated by tracker')
-                            logger.debug(f'Actual upload of torrent {to.tid} is {to.true_uploaded}')
+
+                            def show_size(byte):
+                                units = {'B': 0, 'KiB': 1, 'MiB': 2, 'GiB': 3, 'TiB': 6, 'PiB': 9}
+                                for unit, digits in units.items():
+                                    if byte >= 1024 - 0.5 * 10 ** (-digits):
+                                        byte /= 1024
+                                    else:
+                                        return f'{round(byte if byte >= 1 else 1.0, digits)} {unit}'
+
+                            logger.debug(f'Actual upload of torrent {to.tid} is {show_size(actual_uploaded_byte)}')
 
                     if to.last_announce_time:
                         idle = reduce(lambda a, b: a * 60 + b, map(int, tr.contents[10].string.split(':')))
@@ -748,7 +758,8 @@ class TorrentWrapper:
     @property
     def this_time(self) -> int:
         """当前种子距离上次汇报的时间"""
-        return self.announce_interval - self.next_announce - 1
+        this_time = self.announce_interval - self.next_announce - 1
+        return 0 if this_time < 0 else this_time
 
     async def find_last_announce(self):
         self.last_announce_time = time()
@@ -1556,7 +1567,7 @@ class Limit(FunctionBase):
                 logger.error(f"Could not find 'last_get_time' of torrent {self.to.tid}")
                 continue
 
-            if time() - self.to.this_time + 2 > self.to.last_get_time and f1 == 0:
+            if time() - self.to.this_time + 1 > self.to.last_get_time and f1 == 0:
                 # 刚汇报完，更新上次汇报的上传量
                 if self.to.total_uploaded > 0:
                     try:
@@ -1744,7 +1755,6 @@ class Limit(FunctionBase):
                 if time() >= earliest:
                     if (this_up + upspeed * 20) / this_time > 52428800:
                         await self.re_an()
-                        logger.info(f'Re-announce torrent {self.to.tid}')
                     return
                 if earliest < perfect_time + 60:
                     self.to.set_upload_limit(5120)
@@ -1813,8 +1823,9 @@ class Limit(FunctionBase):
                     tw = tid_tw[tid]
                     data = {'uploaded': tr.contents[6].get_text(' '), 'last_get_time': time()}
                     if tw.date and tw.last_get_time:
-                        if time() - tw.this_time + 2 > tw.last_get_time:
-                            if tw.total_uploaded - tw.byte(data['uploaded'], 1) > 300 * 1024 ** 2 * (tw.this_time + 2):
+                        if time() - tw.this_time + 1 > tw.last_get_time:
+                            if (tw.total_uploaded + tw.byte(tw.uploaded_before, -1) - tw.byte(data['uploaded'], 1)
+                            ) > 300 * 1024 ** 2 * (tw.this_time + 2):
                                 tw.true_uploaded = data['uploaded']
                             if tw.true_uploaded or tw.last_announce_time:
                                 tmp_info.append(tw)
