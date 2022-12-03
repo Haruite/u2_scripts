@@ -111,59 +111,6 @@ CONFIG = {  # 应该跟 json 差不多，放到 ide 里方便能看出错误
     'log_path': f'{os.path.splitext(__file__)[0]}.log',  # 日志路径
 }
 
-
-class CheckKeys:
-    str_keys = ('name', 'tracker', 'state')
-    int_keys = ('total_uploaded', 'upload_payload_rate', 'total_seeds')
-
-    __slots__ = ()
-
-    def __call__(self, func):
-        """检查 keys 参数是否受支持，以及返回值类型是否符合
-        用于 BT 客户端获取种子信息的函数，自定义客户端只有满足这些要求才能正确运行
-
-        Raises:
-            ValueError: 如果存在 key 不在 all_keys 中
-            TypeError: 如果返回值不是字典或者 key 对应的值不是相应类型
-        """
-
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            keys = []
-            if len(args) > 1:
-                keys = args[len(args) - 1]
-            elif 'keys' in kwargs:
-                keys = kwargs['keys']
-
-            unsupported_keys = [key for key in keys if key not in args[0].all_keys]
-            if unsupported_keys:
-                raise ValueError(f'{unsupported_keys} not supported. '
-                                 f'These are the all available keys: \n{args[0].all_keys}')
-            res = func(*args, **kwargs)
-            if not isinstance(res, dict) and res is not None:
-                raise TypeError(f'Return value of function {func.__name__} should be dict type')
-            if res:
-                _res = res
-                if list(res.keys())[0] in keys:
-                    _res = {'_': _res}
-
-                for _id, data in _res.items():
-                    for key, val in data.items():
-                        if key in self.int_keys and not isinstance(val, int):
-                            raise TypeError(f'The value of "{key}" should be int type')
-                        elif key in self.str_keys and not isinstance(val, str) and not (key == 'tracker' and not val):
-                            raise TypeError(f'The value of "{key}" should be str type')
-                        if key not in keys:
-                            raise TypeError(f'Key "{key}" is not supported. Check return value {res}')
-
-            return res
-
-        return wrapper
-
-
-check_keys = CheckKeys()
-
-
 class BtClient(metaclass=ABCMeta):
     """BT 客户端基类"""
     all_keys = ('name',  # str 类型，文件名 (外层文件夹名)
@@ -174,18 +121,43 @@ class BtClient(metaclass=ABCMeta):
                 'tracker',  # str 类型，种子当前 tracker
                 'upload_payload_rate',  # int 类型，上传速度 (B / s)
                 )
+    str_keys = ('name', 'tracker', 'state')
+    int_keys = ('total_uploaded', 'upload_payload_rate', 'total_seeds')
 
-    wrapped_classes = []
+    @classmethod
+    def check_keys(cls, func):
+        def wrapper(self, keys):
+            res = func(self, keys)
+            if 'checked' not in self.__dict__:
+                self.checked = False
+            if self.checked:
+                return res
 
-    def __new__(cls, *args, **kwargs):
-        ins = super(BtClient, cls).__new__(cls)
-        subclass = ins.__class__
+            unsupported_keys = [key for key in keys if key not in cls.all_keys]
+            if unsupported_keys:
+                raise ValueError(f'{unsupported_keys} not supported. '
+                                 f'These are the all available keys: \n{cls.all_keys}')
+            if not isinstance(res, dict) and res is not None:
+                raise TypeError(f'Return value of function {func.__name__} '
+                                f'of class {self.__class__} should be dict type')
+            if res:
+                for _id, data in res.items():
+                    for key, val in data.items():
+                        if key in cls.int_keys and not isinstance(val, int):
+                            raise TypeError(f'The value of "{key}" should be int type')
+                        elif key in cls.str_keys and not isinstance(val, str) and not (key == 'tracker' and not val):
+                            raise TypeError(f'The value of "{key}" should be str type')
+                        if key not in keys:
+                            raise TypeError(f'Key "{key}" is not supported. Check return value {res}')
 
-        if subclass not in cls.wrapped_classes:
-            for function in ('seeding_torrents_info', 'active_torrents_info'):
-                setattr(subclass, function, check_keys(getattr(subclass, function)))
-            cls.wrapped_classes.append(subclass)
-        return ins
+            self.checked = True
+            return res
+
+        return wrapper
+
+    def __init_subclass__(cls, **kwargs):
+        for function in 'active_torrents_info', 'seeding_torrents_info':
+            setattr(cls, function, cls.check_keys(cls.__dict__[function]))
 
     @abstractmethod
     def call(self, method, *args, **kwargs):
@@ -193,28 +165,23 @@ class BtClient(metaclass=ABCMeta):
         :param method: 方法
         :type method: str
         """
-        pass
 
     @abstractmethod
     def active_torrents_info(self, keys):
         """获取所有活动的种子信息
-
         :param keys: 包含种子信息相关键的列表，取值在 all_keys 中
         :type keys: List[str]
         :return: 以种子 hash 为键，种子信息（一个字典，键为 keys 中的值）为值的字典。
          如果使用 deluge 以外客户端，需要按照 all_keys 中的说明返回指定类型数据
         :rtype: Dict[str, Dict[str, Any]]
         """
-        pass
 
     @abstractmethod
     def seeding_torrents_info(self, keys):
         """获取所有做种中的种子信息
-
         :type keys: List[str]
         :rtype: Dict[str, Dict[str, Any]]
         """
-        pass
 
 
 class Deluge(LocalDelugeRPCClient, BtClient):
@@ -515,7 +482,6 @@ class Request:
 
     async def request(self, url, method='get', retries=5, **kwargs):
         """异步 http 请求
-
         :rtype: str | Dict[str, str | Dict[str, List[Dict[str, str | int | None]]]]
 
         Examples
@@ -617,7 +583,7 @@ class MagicSeed(Request):
             cont = table[0].contents[1].contents
             tid = int(cont[1].a['href'][15:-6])
 
-            '''判断种子是否已有 2.33x 优惠'''
+            # 判断种子是否已有 2.33x 优惠
             for img in cont[1].select('tr')[1].td.select('img') or []:
                 if img.get('class') == ['arrowup'] and float(img.next_element.text[:-1].replace(',', '.')) >= 2.33:
                     logger.info(f'Torrent {_id}, id: {tid}: 2.33x upload magic existed!')
@@ -629,7 +595,7 @@ class MagicSeed(Request):
                         self.magic_info[_id] = {'ts': int(time()) + 86400 * 30}
                     return _id, tid, True
 
-            '''判断种子时间是否小于最小天数'''
+            # 判断种子时间是否小于最小天数
             delta = time() - self.ts(cont[3].time.get('title') or cont[3].time.get_text(' '), timezone)
             if delta < CONFIG['magic_for_self']['min_d'] * 86400:
                 self.magic_info[_id] = {'ts': int(time())}
@@ -689,11 +655,7 @@ class MagicSeed(Request):
         return tz.localize(dt).timestamp()
 
     async def send_magic(self, _id, tid, _data):
-        """异步施加魔法.
-
-        手动放魔法的话需要检查魔法页面，脚本省去了这个过程，
-        因为实在是太耗时了，尤其是在下载拉满的时候.
-
+        """
         Args:
             _id (str): 种子 hash
             tid (str | int): 种子 id
