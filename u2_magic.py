@@ -50,7 +50,7 @@ from functools import reduce, lru_cache
 from datetime import datetime
 from collections import deque, UserList, UserDict
 from time import time, sleep
-from typing import List, Dict, Tuple, Union, Any
+from typing import List, Dict, Tuple, Union, Any, Optional
 
 from loguru import logger
 from bs4 import BeautifulSoup, Tag
@@ -584,10 +584,6 @@ class TorrentManager(UserDict):
     当使用 __getitem__ 或 values 或 items 访问值时会生成 TorrentWrapper 对象
     """
     instances = []
-    requests_args = {
-        'headers': {'user-agent': 'U2-Auto-Magic'},
-        'cookies': cookies, 'proxy': proxy
-    }
 
     def __init__(self, dic=None, client: Union[Deluge, QBittorrent, None] = None, accurate_next_announce=True):
         for instance in self.instances:
@@ -619,70 +615,48 @@ class TorrentManager(UserDict):
         with open(torrents_info_path, 'w', encoding='utf-8') as f:
             f.write('\n'.join([instance.__repr__() for instance in cls.instances]))
 
-    async def request(self, url: str, method: str = 'get',
-                      timeout: Union[int, float] = 10, retries: int = 5, **kw) -> Union[str, None]:
-        """网页请求"""
-        if BTClient.local_clients and any(local_client.tc_limited for local_client in BTClient.local_clients):
-            # 限速爬不动
-            raise Exception('Waiting for release tc limit')
+    class RequestManager:
+        requests_args = {
+            'headers': {'user-agent': 'U2-Auto-Magic'},
+            'cookies': cookies, 'proxy': proxy
+        }
+        valid_cookie = None
+        un_debug_urls = f'https://u2.dmhy.org/getusertorrentlistajax.php?userid={uid}&type=leeching',
 
-        for i in range(retries + 1):
-            try:
-                async with self.session.request(method, url, **self.requests_args, timeout=timeout, **kw) as resp:
-                    if resp.status < 300:
-                        text = await resp.text()
-                        if method == 'get':
-                            if url != f'https://u2.dmhy.org/getusertorrentlistajax.php?userid={uid}&type=leeching':
-                                logger.debug(f'Downloaded page: {url}')
-                            if '<title>Access Point :: U2</title>' in text or 'Access Denied' in text:
-                                logger.error('Your cookie is wrong')
-                        return text
-                    elif i == retries - 1:
-                        raise Exception(f'Failed to request... method: {method}, url: {url}, kw: {kw}'
-                                        f' ------ status code: {resp.status}')
-            except Exception as e:
-                if i == retries - 1:
-                    raise
-                elif isinstance(e, asyncio.TimeoutError):
-                    timeout += 20
+        async def request(self: Any, url: str, method: str = 'get',
+                          timeout: Union[int, float] = 10, retries: int = 5, **kw) -> Union[str, None]:
+            """网页请求"""
+            if BTClient.local_clients and any(local_client.tc_limited for local_client in BTClient.local_clients):
+                # 限速爬不动
+                raise Exception('Waiting for release tc limit')
+            cls = TorrentManager.RequestManager
 
-    async def info_from_peer_list(self, to):
-        try:
-            peer_list = await self.request(f'https://u2.dmhy.org/viewpeerlist.php?id={to.tid}')
-            tables = BeautifulSoup(peer_list.replace('\n', ' '), 'lxml').find_all('table')
-        except Exception as e:
-            logger.error(e)
-            return
-
-        for table in tables or []:
-            for tr in filter(lambda _tr: 'nowrap' in str(_tr), table):
-                if tr.get('bgcolor'):
-
-                    if to.true_uploaded:
-                        to.true_uploaded = tr.contents[1].string
-                        to.true_downloaded = tr.contents[4].string
-                        actual_uploaded_byte = to.true_uploaded_byte + to.uploaded_before_byte
-                        if abs(actual_uploaded_byte - to.uploaded_byte) < 1024 ** 3:
-                            del to.true_uploaded
-                            del to.true_downloaded
-                        else:
-                            logger.debug(f'Some upload of torrent {to.tid} was not calculated by tracker')
-
-                            def show_size(byte):
-                                units = {'B': 0, 'KiB': 1, 'MiB': 2, 'GiB': 3, 'TiB': 6, 'PiB': 9}
-                                for unit, digits in units.items():
-                                    if byte >= 1024 - 0.5 * 10 ** (-digits):
-                                        byte /= 1024
+            for i in range(retries + 1):
+                try:
+                    async with self.session.request(method, url, **cls.requests_args, timeout=timeout, **kw) as resp:
+                        if resp.status < 300:
+                            text = await resp.text()
+                            if method == 'get':
+                                if url not in cls.un_debug_urls:
+                                    logger.debug(f'Downloaded page: {url}')
+                                if not cls.valid_cookie:
+                                    if '<title>Access Point :: U2</title>' in text or 'Access Denied' in text:
+                                        logger.error('Your cookie is wrong')
+                                        cls.valid_cookie = False
                                     else:
-                                        return f'{round(byte if byte >= 1 else 1.0, digits)} {unit}'
+                                        cls.valid_cookie = True
+                            return text
+                        elif i == retries - 1:
+                            raise Exception(f'Failed to request... method: {method}, url: {url}, kw: {kw}'
+                                            f' ------ status code: {resp.status}')
+                except Exception as e:
+                    if i == retries - 1:
+                        raise
+                    elif isinstance(e, asyncio.TimeoutError):
+                        timeout += 20
 
-                            logger.debug(f'Actual upload of torrent {to.tid} is {show_size(actual_uploaded_byte)}')
-
-                    if to.last_announce_time:
-                        idle = reduce(lambda a, b: a * 60 + b, map(int, tr.contents[10].string.split(':')))
-                        to.last_announce_time = time() - idle
-
-                    break
+    async def request(self, *args, **kwargs):
+        return await self.RequestManager.request(self, *args, **kwargs)
 
     def dl_to_info(self, keys=None):
         if keys:
@@ -761,11 +735,6 @@ class TorrentWrapper:
         this_time = self.announce_interval - self.next_announce - 1
         return 0 if this_time < 0 else this_time
 
-    async def find_last_announce(self):
-        self.last_announce_time = time()
-        async with aiohttp.ClientSession() as self.manager.session:
-            await self.manager.info_from_peer_list(self)
-
     @property
     def next_announce(self):
         next_announce = self.torrent_dict.next_announce
@@ -797,6 +766,49 @@ class TorrentWrapper:
             return int(self.last_announce_time + self.announce_interval - time()) + 1
         else:
             return next_announce
+
+    async def find_last_announce(self):
+        self.last_announce_time = time()
+        async with aiohttp.ClientSession() as self.manager.session:
+            await self.info_from_peer_list()
+
+    async def info_from_peer_list(self):
+        try:
+            peer_list = await self.manager.request(f'https://u2.dmhy.org/viewpeerlist.php?id={self.tid}')
+            tables = BeautifulSoup(peer_list.replace('\n', ' '), 'lxml').find_all('table')
+        except Exception as e:
+            logger.error(e)
+            return
+
+        for table in tables or []:
+            for tr in filter(lambda _tr: 'nowrap' in str(_tr), table):
+                if tr.get('bgcolor'):
+
+                    if self.true_uploaded:
+                        self.true_uploaded = tr.contents[1].string
+                        self.true_downloaded = tr.contents[4].string
+                        actual_uploaded_byte = self.true_uploaded_byte + self.uploaded_before_byte
+                        if abs(actual_uploaded_byte - self.uploaded_byte) < 1024 ** 3:
+                            del self.true_uploaded
+                            del self.true_downloaded
+                        else:
+                            logger.debug(f'Some upload of torrent {self.tid} was not calculated by tracker')
+
+                            def show_size(byte):
+                                units = (('B', 0), ('KiB', 1), ('MiB', 2), ('GiB', 3), ('TiB', 6), ('PiB', 9))
+                                for unit, digits in units:
+                                    if byte >= 1024 - 0.5 * 10 ** (-digits):
+                                        byte /= 1024
+                                    else:
+                                        return f'{round(byte if byte >= 1 else 1.0, digits)} {unit}'
+
+                            logger.debug(f'Actual upload of torrent {self.tid} is {show_size(actual_uploaded_byte)}')
+
+                    if self.last_announce_time:
+                        idle = reduce(lambda a, b: a * 60 + b, map(int, tr.contents[10].string.split(':')))
+                        self.last_announce_time = time() - idle
+
+                    break
 
     def set_upload_limit(self, rate):
         self.manager.client.set_upload_limit(self._id, rate)
@@ -948,6 +960,7 @@ class FunctionBase:
         self.to: TorrentWrapper = None
         self.clients = []
         self.magic_tasks = []
+        self.session = None
 
     async def magic(self):
         pass
@@ -969,42 +982,80 @@ class FunctionBase:
         pre_suf = [['时区', '，点击修改。'], ['時區', '，點擊修改。'], ['Current timezone is ', ', click to change.']]
         return [tz_info[len(pre):-len(suf)].strip() for pre, suf in pre_suf if tz_info.startswith(pre)][0]
 
-    @staticmethod
-    @lru_cache(maxsize=max_cache_size)
-    def get_pro(tr: Tag) -> List[Union[int, float]]:
+    class ProType:
+        class_to_pro = {}
+        known_keywords_map = (
+            ('free', {'dr': 0.0}),
+            ('twoup', {'ur': 2.0}),
+            ('halfdown', {'dr': 0.5}),
+            ('thirtypercent', {'dr': 0.3}),
+            ('2up', {'ur': 2.0}),
+            ('50pct', {'dr': 0.5}),
+            ('30pct', {'dr': 0.3}),
+        )
+
+        @classmethod
+        def get_pro_by_class(cls, element_class: str) -> Optional[List[Union[int, float]]]:
+            if element_class in cls.class_to_pro:
+                return cls.class_to_pro[element_class]
+            else:
+                pro_dict = {'ur': 1.0, 'dr': 1.0}
+                if tuple(
+                        pro_dict.update(pro_data)
+                        for pro_type, pro_data in cls.known_keywords_map if pro_type in element_class
+                ):
+                    pro = list(pro_dict.values())
+                    cls.class_to_pro[element_class] = pro
+                    return pro
+                else:
+                    cls.class_to_pro[element_class] = None
+
+    @classmethod
+    def get_pro(cls, tr: Tag) -> List[Union[int, float]]:
+        """返回上传下载比率，如果控制面板关掉了优惠显示，返回的结果可能与实际不符，会在检查魔法是否重复的时候修正
+        :param tr: 优惠信息的行元素，兼容三种 tr: 种子页每行 tr，下载页每行 tr，详情页显示优惠信息的行 tr(实际上魔法信息页的 tr 也行)
         """
-        tr: 兼容三种 tr: 种子页每行 tr，下载页每行 tr，详情页显示优惠信息的行 tr
-        返回上传下载比率，如果控制面板关掉了优惠显示，返回的结果可能与实际不符，会在检查魔法是否重复的时候修正
-        """
-        pro = {'ur': 1.0, 'dr': 1.0}
-        pro_dict = {'free': {'dr': 0.0}, 'twoup': {'ur': 2.0}, 'halfdown': {'dr': 0.5}, 'thirtypercent': {'dr': 0.3}}
-        if tr.get('class'):  # 高亮显示
-            [pro.update(data) for key, data in pro_dict.items() if key in tr['class'][0]]
-        td = tr.tr and tr.select('tr')[1].td or tr.select('td')[1]
-        pro_dict_1 = {'free': {'dr': 0.0}, '2up': {'ur': 2.0}, '50pct': {'dr': 0.5}, '30pct': {'dr': 0.3}, 'custom': {}}
-        for img in td.select('img') or []:  # 图标显示
-            if not [pro.update(data) for key, data in pro_dict_1.items() if key in img['class'][0]]:
-                pro[{'arrowup': 'ur', 'arrowdown': 'dr'}[img['class'][0]]] = float(img.next.text[:-1].replace(',', '.'))
-        for span in td.select('span') or []:  # 标记显示
-            [pro.update(data) for key, data in pro_dict.items() if
-             key in (span.get('class') and span['class'][0] or '')]
-        return list(pro.values())
+        if tr.get('class'):  # 高亮显示或者魔法信息的行
+            pro = cls.ProType.get_pro_by_class(tr['class'][0])
+            if pro:
+                return pro
+
+        if tr.tr:  # 行里还有行，这是种子信息显示，优惠信息在下边
+            td = tr.select('tr')[1].td
+            imgs = td.select("img")  # 优惠图标
+        else:
+            td = None
+            imgs = tr.select("img")
+
+        if imgs:  # 图标显示或自定义优惠或种子详情页
+            pro = [1.0, 1.0]
+            for img in imgs:
+                img_class = img['class'][0]
+                _pro = cls.ProType.get_pro_by_class(img_class)
+                if _pro:  # 图标显示或者种子详情页
+                    return _pro
+                elif img_class == 'arrowup':  # 自定义优惠上传比率
+                    pro[0] = float(img.next.text[:-1].replace(',', '.'))
+                elif img_class == 'arrowdown':  # 自定义优惠下载比率
+                    pro[1] = float(img.next.text[:-1].replace(',', '.'))
+            return pro
+
+        if td:
+            spans = td.select("span[class^='']")
+            if spans:
+                for span in spans:  # 这里 span 的 class 有很多，可能有 hot/tooltip/classic
+                    pro = cls.ProType.get_pro_by_class(span['class'][0])
+                    if pro:  # 标记显示
+                        return pro
+
+        return [1.0, 1.0]
 
     @classmethod
     def save_torrents_info(cls):
         TorrentManager.save_data()
 
-    @property
-    def request(self):
-        return self.torrent_manager.request
-
-    @property
-    def session(self):
-        return self.torrent_manager.session
-
-    @session.setter
-    def session(self, ses):
-        self.torrent_manager.session = ses
+    async def request(self, *args, **kwargs):
+        return await TorrentManager.RequestManager.request(self, *args, **kwargs)
 
     def dl_to_info(self, keys=None):
         return self.torrent_manager.dl_to_info(keys)
@@ -1173,7 +1224,6 @@ class Magic(FunctionBase):
         self.magic_info.save_data()
 
     async def magic(self):
-        self.magic_tasks = []
         for self.to in self.torrent_manager.values():
             if self.to.tid == -1:
                 continue
@@ -1189,7 +1239,7 @@ class Magic(FunctionBase):
             async with aiohttp.ClientSession() as self.session:
                 await asyncio.gather(*self.magic_tasks)
                 self.save_magic_info()
-        self.magic_tasks = []
+        self.magic_tasks.clear()
 
     async def magic_old(self):
         if self.mode != -1:
@@ -1822,7 +1872,7 @@ class Limit(FunctionBase):
             for tr in table.contents[1:]:
                 tid = int(tr.contents[1].a['href'][15:-6])
                 if tid in tid_tw:
-                    tw = tid_tw[tid]
+                    tw: TorrentWrapper = tid_tw[tid]
                     data = {'uploaded': tr.contents[6].get_text(' '), 'last_get_time': time()}
                     if tw.date and tw.last_get_time:
                         if time() - tw.this_time + 1 > tw.last_get_time:
@@ -1834,8 +1884,8 @@ class Limit(FunctionBase):
                             if data['uploaded'].split(' ')[0] != '0':
                                 self.print(f"Last announce upload of torrent {tid} is {data['uploaded']}")
                     tw.update(data)
-            tasks = [self.torrent_manager.info_from_peer_list(to) for to in tmp_info]
-            async with aiohttp.ClientSession() as self.session:
+            tasks = [to.info_from_peer_list() for to in tmp_info]
+            async with aiohttp.ClientSession() as self.torrent_manager.session:
                 await asyncio.gather(*tasks)
         except Exception as e:
             logger.exception(e)
