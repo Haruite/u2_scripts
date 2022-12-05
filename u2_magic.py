@@ -201,6 +201,8 @@ max_cache_size = 256  # type: int
 
 # **********************************************************************************************************************
 
+use_client = bool((magic and magic_new or limit) and len(clients_info) > 0 and enable_clients)
+use_limit = bool(limit and len(clients_info) > 0 and enable_clients)
 
 class BTClient(metaclass=ABCMeta):
     """BT 客户端基类"""
@@ -1166,7 +1168,7 @@ class FunctionBase:
             for tid, td in tid_td.items():  # 新种子
                 td.uploaded_before = td.uploaded
                 td.add_time = time()
-                if tid > min_tid or td.leecher_num > min_leecher_num:
+                if use_client and (tid > min_tid or td.leecher_num > min_leecher_num):
                     async with aiohttp.ClientSession() as self.session:
                         detail_page = await self.request(f'https://u2.dmhy.org/details.php?id={tid}&hit=1')
                     soup = BeautifulSoup(detail_page.replace('\n', ''), 'lxml')
@@ -1193,7 +1195,7 @@ class Magic(FunctionBase):
         _id_tw = {tw._id: tw for tw in self.torrent_manager.values() if tw._id and 'in_client' not in tw}
         all_connected = True
 
-        if _id_tw and len(self.instances) > 1:
+        if _id_tw:
             with ThreadPoolExecutor(max_workers=len(self.instances) - 1) as executor:
                 futures = [executor.submit(cl.downloading_torrents_info, cl.status_keys) for cl in self.clients]
                 for future in as_completed(futures):
@@ -1456,7 +1458,7 @@ class Magic(FunctionBase):
             self.print(f'{_begin}is about to re-announce, passed')
             return True
         if 'total_size' not in self.to:
-            if 'in_client' not in self.to and self.to.is_new:
+            if use_client and 'in_client' not in self.to and self.to.is_new:
                 if time() - self.to.add_time > self.to.size_byte / 55 / 1024 ** 2:
                     return True
                 return
@@ -1907,17 +1909,19 @@ class Run(Magic, Limit):
                 finally:
                     sleep(self.client.connect_interval)
         else:
-            while True:
-                sleep(1)
-                if all(instance.client.connected for instance in self.instances[1:]):
-                    logger.info('All clients connected')
-                    sleep(10)
-                    break
+            if use_client:
+                while True:
+                    sleep(1)
+                    if all(instance.client.connected for instance in self.instances[1:]):
+                        logger.info('All clients connected')
+                        sleep(10)
+                        break
             while True:
                 try:
                     if magic:
                         await self.get_info_from_web()
-                        self.locate_client()
+                        if magic_new and use_client:
+                            self.locate_client()
                         await self.magic()
                 except Exception as e:
                     logger.exception(e)
@@ -1930,20 +1934,20 @@ class Main:
         self.cls = cls
         nest_asyncio.apply()
 
-        if len(modes) > 1:
+        if magic and magic_new and auto_mode and len(modes) > 1:
             for i in range(len(modes) - 1):
                 if modes[i]['uc_limit']['24_max'] < modes[i + 1]['uc_limit']['24_min']:
                     raise ValueError(f"modes[{i}]['uc_limit']['24_max'] < modes[{i + 1}]['uc_limit']['24_min']")
                 if modes[i]['uc_limit']['72_max'] < modes[i + 1]['uc_limit']['72_min']:
                     raise ValueError(f"modes[{i}]['uc_limit']['72_max'] < modes[{i + 1}]['uc_limit']['72_min']")
 
-        if os.path.exists(magic_info_path):
+        if magic and os.path.exists(magic_info_path):
             with open(magic_info_path, 'r', encoding='utf-8') as f:
                 try:
                     self.cls.magic_info = eval(f.read())
                 except:
                     pass
-        if self.cls.magic_info is None:
+        if magic and self.cls.magic_info is None:
             self.cls.magic_info = MagicInfo([])
 
         if os.path.exists(torrents_info_path):
@@ -1954,9 +1958,11 @@ class Main:
                     except:
                         pass
 
-        if magic or limit:
+        global use_client, use_limit
+
+        if magic or use_limit:
             self.cls(None)
-            if len(clients_info) > 0 and enable_clients:
+            if use_client:
                 for client_info in clients_info:
                     client_type = client_info['type']
                     del client_info['type']
@@ -1967,13 +1973,16 @@ class Main:
                         self.cls(QBittorrent(**client_info))
                         self.cls.instances[0].clients.append(QBittorrent(**client_info))
 
+        if len(self.cls.instances) <= 1:
+            use_client, use_limit = False, False
+
         logger.remove(handler_id=0)
         level = 'DEBUG' if enable_debug_output else 'INFO'
         logger.add(sink=sys.stderr, level=level)
         logger.add(sink=log_path, level=level, rotation='5 MB', filter=BTClient.log_filter)
 
     def run(self):
-        if self.cls.instances:
+        if magic or use_limit:
             try:
                 with ThreadPoolExecutor(max_workers=len(self.cls.instances)) as executor:
                     futures = {executor.submit(asyncio.run, instance.run()): instance.client for instance in
