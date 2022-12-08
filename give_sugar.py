@@ -111,8 +111,10 @@ class TransferUCoin:
                 if html.status_code < 400:
                     soup = BeautifulSoup(html.text.replace('\n', ''), 'lxml')
                     info_block = soup.find('table', {'id': 'info_block'})
-                    self.uc_amount = float(
-                        info_block.find('span', {'class': 'ucoin-notation ucoin-collapsed'})['title'].replace(',', ''))
+                    self.uc_amount = sum(map(
+                        lambda x: int(x[0].text) * x[1],
+                        zip(info_block.find_all('span', {'class': re.compile('^ucoin-symbol')}), (10000, 100, 1))
+                    ))
                     if not self.uid:
                         self.uid = int(info_block.a['href'][19:])
                     return soup
