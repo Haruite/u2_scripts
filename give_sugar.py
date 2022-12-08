@@ -112,10 +112,8 @@ class TransferUCoin:
                     soup = BeautifulSoup(html.text.replace('\n', ''), 'lxml')
                     info_block = soup.find('table', {'id': 'info_block'})
                     self.uc_amount = sum(map(
-                        lambda span: int(span.text) * {
-                            'ucoin-gold': 10000, 'ucoin-silver': 100, 'ucoin-copper': 1}[span['class'][1]],
-                        info_block.find_all('span', {'class': re.compile('^ucoin-symbol')}))
-                    )
+                        lambda span: int(span.text) * {'gold': 10000, 'silver': 100, 'copper': 1}[span['class'][1][6:]],
+                        info_block.find_all('span', {'class': re.compile('^ucoin-symbol')})))
                     if not self.uid:
                         self.uid = int(info_block.a['href'][19:])
                     return soup
@@ -144,7 +142,7 @@ class TransferUCoin:
                         if info['transferred'] == 0 or 'expect_uc' in info and info['transferred'] < info['expect_uc']:
                             if i > 0 and UPDATE:
                                 self.parse_page()
-                                i += 1
+                            i += 1
                             self.batch_transfer(id_info)
                         if info['transferred'] >= info['expect_uc']:
                             self.transfer_num += 1
