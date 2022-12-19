@@ -128,29 +128,35 @@ default_ratio = 3
 min_secs_before_announce = 20  # type: Union[int, float]
 '''这个值是检查放魔法的时间用的，给自己放魔法的话，在距离汇报时间小于 20s 的时候'''
 modes = [{'uc_limit': {'24_max': 1500000, '72_max': 4300000, '24_min': 0, '72_min': 0},
-          'rules': [{'ur': 2.33, 'dr': 1, 'user': 'ALL', 'min_size': 16146493595, 'max_size': 107374182400, 'min_uploaded': 1073741824, 'ur_less_than': 2},
-                    {'ur': 2.33, 'dr': 1, 'user': 'SELF', 'min_uploaded': 1073741824, 'min_upload_added': 57123065037, 'max_uc_peer_gb_added': 771},
+          'rules': [{'ur': 2.33, 'dr': 1, 'user': 'ALL', 'min_size': 16146493595, 'max_size': 107374182400,
+                     'min_uploaded': 1073741824, 'ur_less_than': 2},
+                    {'ur': 2.33, 'dr': 1, 'user': 'SELF', 'min_uploaded': 1073741824, 'min_upload_added': 57123065037,
+                     'max_uc_peer_gb_added': 771},
                     {'ur': 1, 'dr': 0, 'user': 'ALL'}
                     ]
           },
          {'uc_limit': {'24_max': 2200000, '72_max': 5600000, '24_min': 1400000, '72_min': 4100000},
-          'rules': [{'ur': 2.33, 'dr': 1, 'user': 'SELF', 'min_uploaded': 1073741824, 'min_upload_added': 57123065037, 'max_uc_peer_gb_added': 771},
+          'rules': [{'ur': 2.33, 'dr': 1, 'user': 'SELF', 'min_uploaded': 1073741824, 'min_upload_added': 57123065037,
+                     'max_uc_peer_gb_added': 771},
                     {'ur': 1, 'dr': 0, 'user': 'ALL'}
                     ]
           },
          {'uc_limit': {'24_max': 3000000, '72_max': 7500000, '24_min': 2050000, '72_min': 5300000},
-          'rules': [{'ur': 2.33, 'dr': 1, 'user': 'SELF', 'min_uploaded': 5368709120, 'min_upload_added': 85684597555, 'max_uc_peer_gb_added': 545},
+          'rules': [{'ur': 2.33, 'dr': 1, 'user': 'SELF', 'min_uploaded': 5368709120, 'min_upload_added': 85684597555,
+                     'max_uc_peer_gb_added': 545},
                     {'ur': 1, 'dr': 0, 'user': 'ALL', 'min_size': 16146493595, 'max_size': 214748364800},
                     {'ur': 1, 'dr': 0, 'user': 'SELF'}
                     ]
           },
          {'uc_limit': {'24_max': 4500000, '72_max': 10000000, '24_min': 2900000, '72_min': 7000000},
-          'rules': [{'ur': 2.33, 'dr': 1, 'user': 'SELF', 'min_uploaded': 16106127360, 'min_upload_added': 214211493888, 'max_uc_peer_gb_added': 545},
+          'rules': [{'ur': 2.33, 'dr': 1, 'user': 'SELF', 'min_uploaded': 16106127360, 'min_upload_added': 214211493888,
+                     'max_uc_peer_gb_added': 545},
                     {'ur': 1, 'dr': 0, 'user': 'SELF'}
                     ]
           },
          {'uc_limit': {'24_max': 6000000, '72_max': 12000000, '24_min': 4200000, '72_min': 9400000},
-          'rules': [{'ur': 1, 'dr': 0, 'user': 'SELF', 'min_download_reduced': 5368709120, 'max_uc_peer_gb_reduced': 4727}]
+          'rules': [
+              {'ur': 1, 'dr': 0, 'user': 'SELF', 'min_download_reduced': 5368709120, 'max_uc_peer_gb_reduced': 4727}]
           }
          ]  # type: List[Dict[str, Union[Dict[str, Union[int, float]], List[Dict[str, Union[int, float, str]]]]]]
 '''这是新种的魔法规则，这下面的子项我称之为”模式“，可以配置任意套模式，程序中用 mode 表示(其实是用序号代替这个模式)
@@ -191,6 +197,8 @@ local_hosts = '127.0.0.1', 'http://127.0.0.1',  # type: Tuple[str, ...]
 '本地客户端 ip'
 max_cache_size = 256  # type: int
 'lru_cache 的 max_size'
+check_peer_list = True  # type: Any
+'客户端的 TorrentManger 第一次添加某个种子时，是否从 peerlist 获取上传量，这项操作可以保证上传量计算不出差错'
 
 # **********************************************************************************************************************
 
@@ -206,6 +214,7 @@ if use_client:
 
     clients = []
     clients_copy = []
+
 
     class BTClient(metaclass=ABCMeta):
         """BT 客户端基类"""
@@ -315,7 +324,6 @@ if use_client:
             """客户端连接失败后重连"""
 
         if use_limit:
-
             @abstractmethod
             def set_upload_limit(self, _id: str, rate: Union[int, float]):
                 """设置上传限速
@@ -348,12 +356,13 @@ if use_client:
             返回以种子 hash 为 key (小写), 种子信息(见 torrent_status 返回值)为值的字典
             """
 
+
     for client_info in clients_info:
         client_type = client_info['type']
         del client_info['type']
         if client_type in ['de', 'Deluge', 'deluge']:
-            if 'LocalDelugeRPCClient' not in globals():
-                from deluge_client import LocalDelugeRPCClient, FailedToReconnectException
+            from deluge_client import LocalDelugeRPCClient, FailedToReconnectException
+
 
             class Deluge(BTClient, LocalDelugeRPCClient):  # 主要是把 call 重写了一下，因为 deluge 太容易失联了
                 timeout = 10
@@ -399,7 +408,6 @@ if use_client:
                     return LocalDelugeRPCClient.call(self, method, *args, **kwargs)
 
                 if use_limit:
-
                     def set_upload_limit(self, _id, rate):
                         return self.core.set_torrent_options([_id], {'max_upload_speed': rate})
 
@@ -423,12 +431,13 @@ if use_client:
                 def downloading_torrents_info(self, keys):
                     return self.core.get_torrents_status({'state': 'Downloading'}, keys)
 
+
             clients.append(Deluge(**client_info))
             clients_copy.append(Deluge(**client_info))
         elif client_type in ['qb', 'QB', 'qbittorrent', 'qBittorrent']:
-            if 'qbittorrentapi' not in globals():
-                import qbittorrentapi
-                from qbittorrentapi import APIConnectionError, HTTPError
+            import qbittorrentapi
+            from qbittorrentapi import APIConnectionError, HTTPError
+
 
             class QBittorrent(BTClient, qbittorrentapi.Client):
                 def __init__(self,
@@ -504,7 +513,6 @@ if use_client:
                     return {key: self.status_funcs[key](torrent) for key in keys}
 
                 if use_limit:
-
                     def re_announce(self, _id):
                         self.call('torrents_reannounce', torrent_hashes=_id)
 
@@ -531,6 +539,7 @@ if use_client:
                     else:
                         return {torrent.hash: self.create_torrent_status(torrent, keys) for torrent in torrents}
 
+
             clients.append(QBittorrent(**client_info))
             clients_copy.append(QBittorrent(**client_info))
 
@@ -542,6 +551,7 @@ class TorrentDict(UserDict):
     """包含种子信息的字典
     item 方式书写不方便，可以通过属性访问字典的值
     """
+
     def __repr__(self):
         return f'{self.__class__.__name__}({self.data})'
 
@@ -614,7 +624,7 @@ class TorrentManager(UserDict):
     """
     instances = []
 
-    def __init__(self, dic=None, client = None, accurate_next_announce=True):
+    def __init__(self, dic=None, client=None, accurate_next_announce=True):
         for instance in self.instances:
             if instance.client and client:
                 if instance.client.host == client.host and instance.client.port == client.port:
@@ -825,7 +835,7 @@ class TorrentWrapper:
                             if abs(actual_uploaded_byte - self.uploaded_byte) < 1024 ** 3:
                                 del self.true_uploaded
                                 del self.true_downloaded
-                            else:
+                            elif actual_uploaded_byte > self.uploaded_byte:
                                 logger.debug(f'Some upload of torrent {self.tid} was not calculated by tracker')
 
                                 def show_size(byte):
@@ -836,7 +846,8 @@ class TorrentWrapper:
                                         else:
                                             return f'{round(byte if byte >= 1 else 1.0, digits)} {unit}'
 
-                                logger.debug(f'Actual upload of torrent {self.tid} is {show_size(actual_uploaded_byte)}')
+                                logger.debug(
+                                    f'Actual upload of torrent {self.tid} is {show_size(actual_uploaded_byte)}')
 
                         if self.last_announce_time:
                             idle = reduce(lambda a, b: a * 60 + b, map(int, tr.contents[10].string.split(':')))
@@ -1034,6 +1045,24 @@ class FunctionBase:
                         td.tid = -1
 
             self.torrent_manager.update(_id_td)
+            # 修复 uploaded_before 的问题，因为有可能种子下载途中有汇报后运行脚本
+            tasks = []
+            for _id in _id_td:
+                tw = self.torrent_manager[_id]
+                if tw.tid != -1:
+                    if not check_peer_list:
+                        if time() - tw.time_added >= tw.announce_interval:
+                            tw.uploaded_before = '0 B'
+                            self.instances[0].torrent_manager[tw.tid].uploaded_before = '0 B'
+                    else:
+                        tw.uploaded_before = '0 B'
+                        self.instances[0].torrent_manager[tw.tid].uploaded_before = '0 B'
+                        tw.true_uploaded = tw.uploaded
+                        tasks.append(tw.info_from_peer_list())
+            if tasks:
+                async with aiohttp.ClientSession() as self.torrent_manager.session:
+                    await asyncio.gather(*tasks)
+
             self.torrent_manager.last_connect = time()
             if update_upload:
                 self.instances[0].torrent_manager.last_connect = self.torrent_manager.last_connect
@@ -1949,6 +1978,7 @@ elif use_limit:
 else:
     Run = type('Run', (FunctionBase,), {})
 
+
 async def run_job(self):
     if self.client is not None:
         while True:
@@ -1981,6 +2011,7 @@ async def run_job(self):
                 logger.exception(e)
             finally:
                 sleep(interval)
+
 
 Run.run = run_job
 
