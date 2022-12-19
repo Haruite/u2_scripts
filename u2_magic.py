@@ -197,13 +197,22 @@ local_hosts = '127.0.0.1', 'http://127.0.0.1',  # type: Tuple[str, ...]
 '本地客户端 ip'
 max_cache_size = 256  # type: int
 'lru_cache 的 max_size'
-check_peer_list = True  # type: Any
+check_peer_list = False  # type: Any
 '客户端的 TorrentManger 第一次添加某个种子时，是否从 peerlist 获取上传量，这项操作可以保证上传量计算不出差错'
 
 # **********************************************************************************************************************
 
 use_client = bool((magic and magic_new or limit) and len(clients_info) > 0 and enable_clients)
 use_limit = bool(limit and len(clients_info) > 0 and enable_clients)
+
+
+class Deluge:
+    pass
+
+
+class QBittorrent:
+    pass
+
 
 if use_client:
     import subprocess
@@ -624,7 +633,7 @@ class TorrentManager(UserDict):
     """
     instances = []
 
-    def __init__(self, dic=None, client=None, accurate_next_announce=True):
+    def __init__(self, dic=None, client: Union[Deluge, QBittorrent, None] = None, accurate_next_announce=True):
         for instance in self.instances:
             if instance.client and client:
                 if instance.client.host == client.host and instance.client.port == client.port:
@@ -880,7 +889,7 @@ class TorrentWrapper:
 class FunctionBase:
     instances = []
 
-    def __init__(self, client):
+    def __init__(self, client: Union[Deluge, QBittorrent, None]):
         self.client = client
         self.instances.append(self)
         n = self.instances.index(self)
@@ -1968,18 +1977,23 @@ if use_limit:
             except Exception as e:
                 logger.exception(e)
 
+
 if magic:
     if use_limit:
-        Run = type('RunMagicLimit', (Magic, Limit), {})
+        class Run(Magic, Limit):
+            pass
     else:
-        Run = type('RunMagic', (Magic,), {})
+        class Run(Magic):
+            pass
 elif use_limit:
-    Run = type('RunLimit', (Limit,), {})
+    class Run(Limit):
+        pass
 else:
-    Run = type('Run', (FunctionBase,), {})
+    class Run(FunctionBase):
+        pass
 
 
-async def run_job(self):
+async def run_job(self: Run):
     if self.client is not None:
         while True:
             try:
@@ -2059,7 +2073,7 @@ class Main:
         logger.add(sink=log_path, level=level, rotation='5 MB')
 
     def run(self):
-        if self.cls.instances:
+        if self.cls.instances:  # type instances: List[Run]
             try:
                 with ThreadPoolExecutor(max_workers=len(self.cls.instances)) as executor:
                     futures = {executor.submit(asyncio.run, instance.run()): instance.client
