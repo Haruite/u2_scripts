@@ -235,10 +235,12 @@ if use_client:
                        ]
 
         def __init__(self, host, port, min_announce_interval, connect_interval):
-            self.host = host
+            if 'host' not in self.__dict__:
+                self.host = host
             match = re.findall(r'https?://(.*)', self.host)
             self.ip = match[0] if match else self.host
-            self.port = port
+            if 'port' not in self.__dict__:
+                self.port = port
             self.min_announce_interval = min_announce_interval
             self.connect_interval = connect_interval
             self.enable_tc = False
@@ -386,9 +388,10 @@ if use_client:
                              min_announce_interval: int = 300,
                              connect_interval: int = 1.5
                              ):
-                    BTClient.__init__(self, host, port, min_announce_interval, connect_interval)
                     LocalDelugeRPCClient.__init__(self, host, port, username, password,
                                                   decode_utf8, automatic_reconnect)
+                    BTClient.__init__(self, host, port, min_announce_interval, connect_interval)
+
                     try:
                         min_announce_interval = self.ltconfig.get_settings()['min_announce_interval']
                         if min_announce_interval != self.min_announce_interval:
@@ -458,12 +461,12 @@ if use_client:
                              connect_interval: int = 1.5,
                              **kwargs
                              ):
-                    BTClient.__init__(self, host, port, min_announce_interval, connect_interval)
                     qbittorrentapi.Client.__init__(
                         self, host=host, port=port, username=username, password=password,
                         REQUESTS_ARGS={'timeout': 20}, FORCE_SCHEME_FROM_HOST=True,
                         VERIFY_WEBUI_CERTIFICATE=True if 'verify' not in kwargs else kwargs['verify']
                     )
+                    BTClient.__init__(self, host, port, min_announce_interval, connect_interval)
 
                     self.connected = False
                     self.status_funcs = self.create_status_funcs()
@@ -706,6 +709,10 @@ class TorrentManager(UserDict):
 
     async def request(self, *args, **kwargs):
         return await self.RequestManager.request(self, *args, **kwargs)
+        # 以上近似于
+        # RequestManager = type(self).__mro__[0].__dict__['RequestManager']
+        # request = RequestManager.__mro__[0].__dict__['request']  # type(RequestManager).__mro__ 没找到
+        # return await type(request).__get__(request, None, RequestManager)(self, *args, **kwargs)
 
     if use_client:
 
