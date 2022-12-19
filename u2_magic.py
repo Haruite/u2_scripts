@@ -1123,23 +1123,29 @@ class FunctionBase:
                 else:
                     self.torrent_manager.pop(tid)
 
+            async def find_torrent_hash(_td: TorrentDict):
+                detail_page = await self.request(f'https://u2.dmhy.org/details.php?id={_td.tid}&hit=1')
+                soup = BeautifulSoup(detail_page.replace('\n', ''), 'lxml')
+                _td.tz = self.get_tz(soup)
+                tab = soup.find('table', {'width': '90%'})
+                _td.date = tab.time.attrs.get('title') or tab.time.text
+                for _tr in tab:
+                    if _tr.td.text in [
+                        '种子信息', '種子訊息', 'Torrent Info', 'Информация о торренте',
+                        'Torrent Info', 'Информация о торренте'
+                    ]:  # 这里的空格是 nbsp，一定不要搞错了
+                        _td['_id'] = _tr.tr.contents[-2].contents[1].strip()
+
+            tasks = []
             for tid, td in tid_td.items():  # 新种子
                 td.uploaded_before = td.uploaded
                 td.add_time = time()
                 if use_client and (tid > min_tid or td.leecher_num > min_leecher_num):
-                    async with aiohttp.ClientSession() as self.session:
-                        detail_page = await self.request(f'https://u2.dmhy.org/details.php?id={tid}&hit=1')
-                    soup = BeautifulSoup(detail_page.replace('\n', ''), 'lxml')
-                    td.tz = self.get_tz(soup)
-                    tab = soup.find('table', {'width': '90%'})
-                    td.date = tab.time.attrs.get('title') or tab.time.text
-                    for tr in tab:
-                        if tr.td.text in [
-                            '种子信息', '種子訊息', 'Torrent Info', 'Информация о торренте',
-                            'Torrent Info', 'Информация о торренте'
-                        ]:  # 这里的空格是 nbsp，一定不要搞错了
-                            td['_id'] = tr.tr.contents[-2].contents[1].strip()
+                    tasks.append(find_torrent_hash(td))
                 td.last_get_time = time()
+            if tasks:
+                async with aiohttp.ClientSession() as self.session:
+                    await asyncio.gather(*tasks)
 
             self.torrent_manager.update(tid_td)
             self.torrent_manager.last_connect = time()
