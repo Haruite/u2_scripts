@@ -568,26 +568,22 @@ class TorrentDict(UserDict):
         return f'{self.__class__.__name__}({self.data})'
 
     def __getattr__(self, item):
-        if isinstance(item, str) and item.endswith('byte'):
-            key = item[:-5]
-            if key in self.data:
-                return self.byte(self.data[key])
-        else:
-            return self.data.get(item)
+        if item.endswith('byte'):
+            item = item[:-5]
+        return self.data.get(item)
 
     def __setattr__(self, key, value):
         if key == 'data':
-            super(TorrentDict, self).__setattr__(key, value)
+            self.__dict__['data'] = value
         else:
-            self.data.__setitem__(key, value)
+            self.data[key] = value
 
-    def __delattr__(self, item):
-        self.__delitem__(item)
+    __delattr__ = UserDict.__delitem__
 
     def update(self, obj, **kwargs):
         if isinstance(obj, TorrentWrapper):
-            obj = obj.torrent_dict
-        return super(TorrentDict, self).update(obj, **kwargs)
+            obj = obj.data
+        super(TorrentDict, self).update(obj, **kwargs)
 
     @property
     def delta(self):
@@ -654,8 +650,7 @@ class TorrentManager(UserDict):
     def __repr__(self):
         return f'{self.__class__.__name__}({self.data}, accurate_next_announce={self.ana})'
 
-    def __str__(self):
-        return object.__repr__(self)
+    __str__ = object.__repr__
 
     def __getitem__(self, item):
         if item in self.data:
@@ -664,7 +659,7 @@ class TorrentManager(UserDict):
     @classmethod
     def save_data(cls):
         with open(torrents_info_path, 'w', encoding='utf-8') as f:
-            f.write('\n'.join([instance.__repr__() for instance in cls.instances]))
+            f.write('\n'.join([repr(instance) for instance in cls.instances]))
 
     class RequestManager:
         requests_args = {
@@ -721,41 +716,25 @@ class TorrentManager(UserDict):
 
 class TorrentWrapper:
     def __init__(self, torrent_dict: TorrentDict, manager: TorrentManager):
-        self.torrent_dict = torrent_dict
+        self.data = torrent_dict
         self.manager = manager
 
     def __getattr__(self, item):
-        try:
-            return self.torrent_dict.__getattribute__(item)
-        except AttributeError:
-            return self.torrent_dict.__getattr__(item)
+        return getattr(self.data, item)
 
     def __setattr__(self, key, value):
-        if key in ('torrent_dict', 'manager'):
-            super(TorrentWrapper, self).__setattr__(key, value)
+        if key in ('data', 'manager'):
+            self.__dict__[key] = value
         else:
-            self.torrent_dict.__setitem__(key, value)
+            self.data[key] = value
 
-    def __delattr__(self, item):
-        self.torrent_dict.__delitem__(item)
+    __delattr__ = UserDict.__delitem__
 
-    def __iter__(self):
-        return self.torrent_dict.__iter__()
-
-    def __contains__(self, key):
-        return key in self.torrent_dict.data
-
-    def __getitem__(self, item):
-        return self.torrent_dict[item]
-
-    def __setitem__(self, key, value):
-        self.torrent_dict.__setitem__(key, value)
-
-    def __delitem__(self, key):
-        self.torrent_dict.__delitem__(key)
+    for __func in 'iter', 'contains', 'getitem', 'setitem', 'delitem':
+        locals()[f'__{__func}__'] = UserDict.__dict__[f'__{__func}__']
 
     def __str__(self):
-        return f'{self.__class__.__name__}({self.torrent_dict}, {self.manager})'
+        return f'{self.__class__.__name__}({self.data}, {self.manager})'
 
     if use_client:
 
@@ -793,7 +772,7 @@ class TorrentWrapper:
 
         @property
         def next_announce(self):
-            next_announce = self.torrent_dict.next_announce
+            next_announce = self.data.next_announce
             if next_announce > self.announce_interval:
                 next_announce = self.announce_interval
 
