@@ -709,10 +709,6 @@ class TorrentManager(UserDict):
 
     async def request(self, *args, **kwargs):
         return await self.RequestManager.request(self, *args, **kwargs)
-        # 以上近似于
-        # RequestManager = type(self).__mro__[0].__dict__['RequestManager']
-        # request = RequestManager.__mro__[0].__dict__['request']  # type(RequestManager).__mro__ 没找到
-        # return await type(request).__get__(request, None, RequestManager)(self, *args, **kwargs)
 
     if use_client:
 
@@ -960,45 +956,47 @@ class FunctionBase:
                 else:
                     cls.class_to_pro[element_class] = None
 
-    @classmethod
-    def get_pro(cls, tr: Tag) -> List[Union[int, float]]:
-        """返回上传下载比率，如果控制面板关掉了优惠显示，返回的结果可能与实际不符，会在检查魔法是否重复的时候修正
-        :param tr: 优惠信息的行元素，兼容三种 tr: 种子页每行 tr，下载页每行 tr，详情页显示优惠信息的行 tr(实际上魔法信息页的 tr 也行)
-        """
-        if tr.get('class'):  # 高亮显示或者魔法信息的行
-            pro = cls.ProType.get_pro_by_class(tr['class'][0])
-            if pro:
+        @classmethod
+        def get_pro(cls, tr: Tag) -> List[Union[int, float]]:
+            """返回上传下载比率，如果控制面板关掉了优惠显示，返回的结果可能与实际不符，会在检查魔法是否重复的时候修正
+            :param tr: 优惠信息的行元素，兼容三种 tr: 种子页每行 tr，下载页每行 tr，详情页显示优惠信息的行 tr(实际上魔法信息页的 tr 也行)
+            """
+            if tr.get('class'):  # 高亮显示或者魔法信息的行
+                pro = cls.get_pro_by_class(tr['class'][0])
+                if pro:
+                    return pro
+
+            if tr.tr:  # 行里还有行，这是种子信息显示，优惠信息在下边
+                td = tr.select('tr')[1].td
+                imgs = td.select("img")  # 优惠图标
+            else:
+                td = None
+                imgs = tr.select("img")
+
+            if imgs:  # 图标显示或自定义优惠或种子详情页
+                pro = [1.0, 1.0]
+                for img in imgs:
+                    img_class = img['class'][0]
+                    _pro = cls.get_pro_by_class(img_class)
+                    if _pro:  # 图标显示或者种子详情页
+                        return _pro
+                    elif img_class == 'arrowup':  # 自定义优惠上传比率
+                        pro[0] = float(img.next.text[:-1].replace(',', '.'))
+                    elif img_class == 'arrowdown':  # 自定义优惠下载比率
+                        pro[1] = float(img.next.text[:-1].replace(',', '.'))
                 return pro
 
-        if tr.tr:  # 行里还有行，这是种子信息显示，优惠信息在下边
-            td = tr.select('tr')[1].td
-            imgs = td.select("img")  # 优惠图标
-        else:
-            td = None
-            imgs = tr.select("img")
+            if td:
+                spans = td.select("span[class^='']")
+                if spans:
+                    for span in spans:  # 这里 span 的 class 有很多，可能有 hot/tooltip/classic
+                        pro = cls.get_pro_by_class(span['class'][0])
+                        if pro:  # 标记显示
+                            return pro
 
-        if imgs:  # 图标显示或自定义优惠或种子详情页
-            pro = [1.0, 1.0]
-            for img in imgs:
-                img_class = img['class'][0]
-                _pro = cls.ProType.get_pro_by_class(img_class)
-                if _pro:  # 图标显示或者种子详情页
-                    return _pro
-                elif img_class == 'arrowup':  # 自定义优惠上传比率
-                    pro[0] = float(img.next.text[:-1].replace(',', '.'))
-                elif img_class == 'arrowdown':  # 自定义优惠下载比率
-                    pro[1] = float(img.next.text[:-1].replace(',', '.'))
-            return pro
+            return [1.0, 1.0]
 
-        if td:
-            spans = td.select("span[class^='']")
-            if spans:
-                for span in spans:  # 这里 span 的 class 有很多，可能有 hot/tooltip/classic
-                    pro = cls.ProType.get_pro_by_class(span['class'][0])
-                    if pro:  # 标记显示
-                        return pro
-
-        return [1.0, 1.0]
+    get_pro = ProType.get_pro
 
     if use_client:
 
