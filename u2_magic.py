@@ -570,7 +570,10 @@ class TorrentDict(UserDict):
     def __getattr__(self, item):
         if item.endswith('byte'):
             item = item[:-5]
-        return self.data.get(item)
+            if item in self.data:
+                return self.byte(self.data[item])
+        else:
+            return self.data.get(item)
 
     def __setattr__(self, key, value):
         if key == 'data':
@@ -706,7 +709,6 @@ class TorrentManager(UserDict):
         return await self.RequestManager.request(self, *args, **kwargs)
 
     if use_client:
-
         def dl_to_info(self, keys=None):
             if keys:
                 return self.client.downloading_torrents_info(keys)
@@ -737,7 +739,6 @@ class TorrentWrapper:
         return f'{self.__class__.__name__}({self.data}, {self.manager})'
 
     if use_client:
-
         @property
         def announce_interval(self) -> int:
             """当前种子汇报间隔"""
@@ -847,7 +848,6 @@ class TorrentWrapper:
                         break
 
     if use_limit:
-
         def set_upload_limit(self, rate):
             self.manager.client.set_upload_limit(self._id, rate)
             self.max_upload_speed = rate
@@ -978,7 +978,6 @@ class FunctionBase:
     get_pro = ProType.get_pro
 
     if use_client:
-
         def dl_to_info(self, keys=None):
             return self.torrent_manager.dl_to_info(keys)
 
@@ -1219,7 +1218,6 @@ if magic:
                 self.save_data()
 
         if use_client:
-
             def expected_cost(self, to: TorrentWrapper, rule: Dict[str, Any]) -> float:
                 """估计 uc 消耗量"""
                 ttl = to.delta / 2592000
@@ -1291,7 +1289,6 @@ if magic:
                     self.print(f'torrent {self.to.tid} - Is free')
 
         if magic_new:
-
             async def magic_new(self):
                 # 根据 uc 使用量选取相应的规则
                 if self.mode in [-1, len(modes)]:
@@ -1840,7 +1837,6 @@ if use_limit:
                                 self.to._t = time()
 
         if variable_announce_interval:
-
             async def optimize_announce_time(self):
                 """尽量把完成前最后一次汇报时间调整到最合适的点，粗略计算，没有严格讨论问题。
 
