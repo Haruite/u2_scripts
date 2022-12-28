@@ -23,7 +23,6 @@ import transmission_rpc
 from abc import abstractmethod, ABCMeta
 from collections import UserDict
 from concurrent.futures import ThreadPoolExecutor
-from functools import wraps
 from ssl import SSLError
 from datetime import datetime
 from time import time, sleep
@@ -110,6 +109,7 @@ CONFIG = {  # 应该跟 json 差不多，放到 ide 里方便能看出错误
     'data_path': f'{os.path.splitext(__file__)[0]}.data.txt',  # 数据保存路径
     'log_path': f'{os.path.splitext(__file__)[0]}.log',  # 日志路径
 }
+
 
 class BtClient(metaclass=ABCMeta):
     """BT 客户端基类"""
