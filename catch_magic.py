@@ -21,55 +21,55 @@ from bs4 import BeautifulSoup
 from loguru import logger
 
 COOKIES = {'nexusphp_u2': ''}  # type: Dict[str, str]
-'''网站 cookie'''
+'网站 cookie'
 BK_DIR = '/root/backup'  # type: str
-'''备份种子文件夹路径'''
+'备份种子文件夹路径'
 WT_DIR = '/de/wt'  # type: str
-'''BT 客户端监控文件夹'''
+'BT 客户端监控文件夹'
 INTERVAL = 120  # type: Union[int, float]
-'''检查魔法的时间间隔'''
+'检查魔法的时间间隔'
 API_TOKEN = ''  # type: str
-'''填了将默认通过 api 获取最新的魔法信息，否则直接从网页获取'''
+'填了将默认通过 api 获取最新的魔法信息，否则直接从网页获取'
 UID = 50096  # type: int
-'''访问 api 需要将此改为自己的 uid，否则不用管'''
+'访问 api 需要将此改为自己的 uid，否则不用管'
 RUN_CRONTAB = False  # type: Any
-'''如果为真，代表脚本不会死循环，运行一次脚本退出，需要以一定间隔运行脚本，主要解决内存问题；否则一直循环运行不退出'''
+'如果为真，代表脚本不会死循环，运行一次脚本退出，需要以一定间隔运行脚本，主要解决内存问题；否则一直循环运行不退出'
 RUN_TIMES = 1  # type: int
-'''RUN_CRONTAB 为真时运行脚本一次 run 函数循环的次数，默认运行一次脚本结束，但如果频繁运行影响性能的话可以改大'''
+'RUN_CRONTAB 为真时运行脚本一次 run 函数循环的次数，默认运行一次脚本结束，但如果频繁运行影响性能的话可以改大'
 PROXIES = {'http': '', 'https': ''}  # type: Union[Dict[str, Union[str, None]], None]
-'''代理'''
+'代理'
 MAX_SEEDER_NUM = 5  # type: int
-'''最大的做种人数，超过不下载'''
+'最大的做种人数，超过不下载'
 LOG_PATH = f'{os.path.splitext(__file__)[0]}.log'  # type: str
-'''日志文件路径'''
+'日志文件路径'
 DATA_PATH = f'{os.path.splitext(__file__)[0]}.data.txt'  # type: str
-'''数据文件路径'''
+'数据文件路径'
 DOWNLOAD_NON_FREE = False  # type: Any
-'''如果为真为下载不是 free 的种子，否则的话只下载 free 的种子'''
+'如果为真为下载不是 free 的种子，否则的话只下载 free 的种子'
 MIN_DAY = 7  # type: Union[int, float]
-'''种子发布时间超过此天数判断为旧种子，否则判断为新种子'''
+'种子发布时间超过此天数判断为旧种子，否则判断为新种子'
 DOWNLOAD_OLD = True  # type: Any
-'''是否下载旧种子'''
+'是否下载旧种子'
 DOWNLOAD_NEW = False  # type: Any
-'''是否下载新种子'''
+'是否下载新种子'
 MAGIC_SELF = False  # type: Any
-'''如果为真，会下载给自己放魔法的种子，否则不下载'''
+'如果为真，会下载给自己放魔法的种子，否则不下载'
 EFFECTIVE_DELAY = 60  # type: Union[int, float]
-'''如果该魔法是 free 并且生效时间在此之内，就算种子不是 free 也直接下载'''
+'如果该魔法是 free 并且生效时间在此之内，就算种子不是 free 也直接下载'
 DOWNLOAD_DEAD_TO = False  # type: Any
-'''默认不下载无人做种的旧种子(新种总有人做种，所以不考虑有没有人做种一律下载)，如果要下载改成 True'''
+'默认不下载无人做种的旧种子(新种总有人做种，所以不考虑有没有人做种一律下载)，如果要下载改成 True'
 RE_DOWNLOAD = True  # type: Any
-'''如果为 False，检测到备份文件夹有该种子则不再次下载'''
+'如果为 False，检测到备份文件夹有该种子则不再次下载'
 CHECK_PEERLIST = False  # type: Any
-'''检查 peer 列表，如果已经在做种或者在下载则不下载种子'''
+'检查 peer 列表，如果已经在做种或者在下载则不下载种子'
 DA_QIAO = True  # type: Any
-'''是否搭桥，如果搭桥，即使做种人数超过最大值魔法咒语有’搭桥‘或’加速‘也会下载'''
+'是否搭桥，如果搭桥，即使做种人数超过最大值魔法咒语有’搭桥‘或’加速‘也会下载'
 MIN_RE_DL_DAYS = 0  # type: Union[int, float]
-'''离最近一次下载该种子的最小天数，小于这个天数不下载种子'''
+'离最近一次下载该种子的最小天数，小于这个天数不下载种子'
 CAT_FILTER = []  # type: List[str]
 '''种子类型为其中之一则下载，类型见 torrents.php，多个用逗号隔开，不填就不进行类型过滤，比如 ['BDMV', 'Lossless Music']'''
 SIZE_FILTER = [0, -1]  # type: List[Union[int, float]]
-'''体积过滤，第一个数为体积最小值(GB)，第二个为最大值(GB)，-1 表示不设上限'''
+'体积过滤，第一个数为体积最小值(GB)，第二个为最大值(GB)，-1 表示不设上限'
 NAME_FILTER = []  # type: List[str]
 '''过滤种子标题，如果标题或者文件名中包含这些字符串之一则排除不下载，多个用逗号隔开，字符串要加引号，比如 ['BDrip']'''
 R_ARGS = {'cookies': {'nexusphp_u2': ''},
@@ -78,7 +78,7 @@ R_ARGS = {'cookies': {'nexusphp_u2': ''},
           'timeout': 20,
           'proxies': {'http': '', 'https': ''}
           }
-'''requests 模块参数'''
+'requests 模块参数'
 
 
 class CatchMagic:
@@ -301,7 +301,7 @@ class CatchMagic:
                 else:
                     return
 
-        if seeder_count > 0 or seeder_count == 0 and DOWNLOAD_DEAD_TO:
+        if seeder_count > 0 or DOWNLOAD_DEAD_TO:
             if seeder_count <= MAX_SEEDER_NUM:
                 self.dl_to(to_info)
                 return
