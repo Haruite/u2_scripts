@@ -7,7 +7,6 @@ import os
 import random
 import re
 from time import sleep
-from inspect import isfunction
 from typing import Union, Dict, List, Tuple, Callable, Any
 
 import bs4.element
@@ -17,11 +16,11 @@ from loguru import logger
 from bs4 import BeautifulSoup
 
 URL = ''  # type: str
-'''帖子、种子、候选的 url，直接复制即可'''
+'帖子、种子、候选的 url，直接复制即可'
 COOKIES = {'nexusphp_u2': ''}  # type: Dict[str, str]
-'''网站 cookie'''
+'网站 cookie'
 PROXIES = {'http': '', 'https': ''}  # type: Union[Dict[str, Union[str, None]], None]
-'''代理'''
+'代理'
 UC = 50000  # type: Union[int, Tuple[int, int], Tuple[int, int, Union[int, float]], Tuple[Union[int, float], Union[int, float], Callable], List[Union[int, float, Callable]]]
 '''设定发糖数量，有四种方法
 第一种，设定为一个固定值，例 
@@ -43,32 +42,32 @@ UC = 0, 2**(6/7), lambda x: int(round(10000*(2 + x ** 7)))
 脚本将使用随机数区间生成的随机数作为函数的参数，返回值作为发糖金额
 '''
 NUM = -1  # type: int
-'''发糖人数， -1 表示不限制'''
+'发糖人数， -1 表示不限制'
 TEXT = True  # type: Any
-'''是否解析回帖内容，如果不解析一律发给回复者本人，否则的话如果发给回复中解析出有效的用户 id (没有还是发给本人)'''
+'是否解析回帖内容，如果不解析一律发给回复者本人，否则的话如果发给回复中解析出有效的用户 id (没有还是发给本人)'
 RGX = r'((?<![\d.])\d{3,}(?![\d.]))'  # type: Union[str, re.Pattern]
-'''从回复内容中解析发糖 uid 的正则表达式，匹配三位及以上整数（排除小数）'''
+'从回复内容中解析发糖 uid 的正则表达式，匹配三位及以上整数（排除小数）'
 RE = 1  # type: int
-'''同一个用户最大转账次数(一条评论算一次)，-1 为不限制'''
+'同一个用户最大转账次数(一条评论算一次)，-1 为不限制'
 EXT = True  # type: Any
-'''为真时 uc 不足直接退出脚本，否则等到 uc 恢复继续发糖'''
+'为真时 uc 不足直接退出脚本，否则等到 uc 恢复继续发糖'
 MSG = ''  # type: str
-'''留言'''
+'留言'
 INFO = False  # type: Any
-'''是否在留言中注明帖子和评论 id 等信息'''
+'是否在留言中注明帖子和评论 id 等信息'
 UPDATE = False  # type: Any
-'''为真时每次给一个人发糖前都会检查帖子内容，否则等所有人发完了再检查帖子内容'''
+'为真时每次给一个人发糖前都会检查帖子内容，否则等所有人发完了再检查帖子内容'
 DATA_PATH = f'{os.path.splitext(__file__)[0]}.info'  # type: str
-'''数据保存路径'''
+'数据保存路径'
 LOG_PATH = f'{os.path.splitext(__file__)[0]}.log'  # type: str
-'''日志文件路径'''
+'日志文件路径'
 R_ARGS = {'cookies': COOKIES,
           'headers': {'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) '
                                     'Chrome/103.0.5060.134 Safari/537.36 Edg/103.0.1264.77'},
           'proxies': PROXIES,
           'timeout': 20,
           'verify': True}
-'''requests 模块参数'''
+'requests 模块参数'
 
 
 class TransferUCoin:
@@ -157,7 +156,7 @@ class TransferUCoin:
                 if len(UC) == 2:
                     info['expect_uc'] = random.randint(UC[0], UC[1])
                 else:
-                    if isfunction(UC[2]):
+                    if callable(UC[2]):
                         info['expect_uc'] = UC[2](random.uniform(UC[0], UC[1]))
                     else:
                         n = (UC[2] - UC[1]) / (UC[1] - UC[0])
