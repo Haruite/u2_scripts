@@ -37,7 +37,7 @@ download_sticky = True  # 是否下载顶置
 download_no_seeder_sticky = True  # 是否下载无人做种的顶置，为 True 时还是不会下载平均进度为 0 的种子
 download_no_free_sticky = True  # 是否下载不是 free 的顶置种子
 download_no_free_non_sticky = False  # 是否下载不是 free 的非顶置种子
-eval_all_keys = True  # 获取种子所有信息，不开的话用到哪个就获取哪个
+eval_all_keys = False  # 获取种子所有信息，不开的话用到哪个就获取哪个
 
 # *************************日志设置************************
 log_path = f'{os.path.splitext(__file__)[0]}.log'
@@ -82,50 +82,17 @@ def get_url(url):
         logger.error(e)
 
 
-class U2Meta(type):
-    detail_key_dict = {'filename': ['下载', '下載', 'Download', 'Скачивание'],
-                       'author': ['发布人', '發佈人', '發布人', 'Uploader', 'Загрузил'],
-                       'hash': ['种子信息', '種子訊息', 'Torrent Info', 'Информация о торренте'],
-                       'description': ['描述', '描述', 'Description', 'Описание'],
-                       'progress': ['活力度', 'Health', 'Целостность'],
-                       'geoips': ['同伴', 'Peers', 'Всего Участников']
-                       }
-
-    def __new__(mcs, name, bases, attrs):
-        for name, func in attrs.items():
-            if hasattr(func, '__get__') and not hasattr(func, '__set__'):
-                if name.startswith('_') and not (name.startswith('__') and name.endswith('__')):
-                    attrs[name] = mcs.value(func)
-        return super(U2Meta, mcs).__new__(mcs, name, bases, attrs)
-
-    @classmethod
-    def value(mcs, func):  # 其实用 __getattr__ 就行了，不过反正也不复杂，就这样吧
-        @property
-        @wraps(func)
-        def wrapper(self, *args, **kw):
-            name = func.__name__[1:]
-            if name not in self.info:  # sel.info 中没有这个 key，说明之前没有获取
-                if name in mcs.detail_key_dict:  # key 只有详细页才有
-                    self.t_url = f'https://u2.dmhy.org/details.php?id={self.tid}&hit=1'
-                    if self.tid in checked and self.d_url != self.t_url:
-                        # 已经检查过一次，并且详情页不在内存中，返回 None
-                        self.info[name] = None
-                    else:
-                        for self.tr1 in self.detail_page():
-                            if any(word in self.tr1.td.text for word in mcs.detail_key_dict[name]):
-                                self.info[name] = func(self, *args, **kw)
-                                break
-                            else:
-                                self.info[name] = None
-                else:
-                    self.info[name] = func(self, *args, **kw)
-            return self.info.get(name)
-
-        return wrapper
+detail_key_dict = {
+        'filename': ['下载', '下載', 'Download', 'Скачивание'],
+        'author': ['发布人', '發佈人', '發布人', 'Uploader', 'Загрузил'],
+        'hash': ['种子信息', '種子訊息', 'Torrent Info', 'Информация о торренте'],
+        'description': ['描述', '描述', 'Description', 'Описание'],
+        'progress': ['活力度', 'Health', 'Целостность'],
+        'geoips': ['同伴', 'Peers', 'Всего Участников']
+    }
 
 
-class U2Web(metaclass=U2Meta):
-    # 下划线开头的函数在类创建时会被修改为 property
+class U2Web:
     def __init__(self):
         self.keys = [key[1:] for key, obj in type(self).__dict__.items()
                      if isinstance(obj, property) and key.startswith('_')]
@@ -357,6 +324,37 @@ class U2Web(metaclass=U2Meta):
                 logger.exception(e)
             finally:
                 sleep(interval)
+
+    def value(func):
+        @property
+        @wraps(func)
+        def wrapper(self, *args, **kw):
+            name = func.__name__[1:]
+            if name not in self.info:  # sel.info 中没有这个 key，说明之前没有获取
+                if name in detail_key_dict:  # key 只有详细页才有
+                    self.t_url = f'https://u2.dmhy.org/details.php?id={self.tid}&hit=1'
+                    if self.tid in checked and self.d_url != self.t_url:
+                        # 已经检查过一次，并且详情页不在内存中，返回 None
+                        self.info[name] = None
+                    else:
+                        for self.tr1 in self.detail_page():
+                            if any(word in self.tr1.td.text for word in detail_key_dict[name]):
+                                self.info[name] = func(self, *args, **kw)
+                                break
+                            else:
+                                self.info[name] = None
+                else:
+                    self.info[name] = func(self, *args, **kw)
+            return self.info.get(name)
+        return wrapper
+
+    for name in list(vars()):
+        obj = vars()[name]
+        if hasattr(obj, '__get__') and not hasattr(obj, '__set__'):
+            if name.startswith('_') and not (name.startswith('__') and name.endswith('__')):
+                vars()[name] = value(obj)
+
+    del value, name, obj
 
 
 if __name__ == '__main__':
