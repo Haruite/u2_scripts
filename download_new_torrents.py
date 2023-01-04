@@ -328,7 +328,7 @@ class U2Web:
     def value(func):
         @property
         @wraps(func)
-        def wrapper(self, *args, **kw):
+        def wrapper(self):
             name = func.__name__[1:]
             if name not in self.info:  # sel.info 中没有这个 key，说明之前没有获取
                 if name in detail_key_dict:  # key 只有详细页才有
@@ -339,18 +339,18 @@ class U2Web:
                     else:
                         for self.tr1 in self.detail_page():
                             if any(word in self.tr1.td.text for word in detail_key_dict[name]):
-                                self.info[name] = func(self, *args, **kw)
+                                self.info[name] = func(self)
                                 break
                             else:
                                 self.info[name] = None
                 else:
-                    self.info[name] = func(self, *args, **kw)
+                    self.info[name] = func(self)
             return self.info.get(name)
         return wrapper
 
     for name in list(vars()):
         obj = vars()[name]
-        if hasattr(obj, '__get__') and not hasattr(obj, '__set__'):
+        if hasattr(type(obj), '__get__') and not hasattr(type(obj), '__set__'):
             if name.startswith('_') and not (name.startswith('__') and name.endswith('__')):
                 vars()[name] = value(obj)
 
