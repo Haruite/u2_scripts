@@ -16,7 +16,7 @@ from datetime import datetime
 from time import sleep, time
 from typing import Dict, List, Union, Any
 
-from requests import get, ReadTimeout
+from requests import get, ReadTimeout, ConnectTimeout
 from bs4 import BeautifulSoup
 from loguru import logger
 
@@ -331,7 +331,7 @@ class CatchMagic:
                         self.checked.append(futures[future])
                     except Exception as er:
                         error = True
-                        if isinstance(er, ReadTimeout):
+                        if isinstance(er, (ReadTimeout, ConnectTimeout)):
                             logger.error(er)
                         else:
                             logger.exception(er)
