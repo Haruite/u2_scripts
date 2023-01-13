@@ -50,7 +50,7 @@ def _(obj: tuple):
 @bencode.register
 def _(obj: dict):
     contents = [b'd']
-    for k, v in obj.items():
+    for k, v in sorted(obj.items()):
         if isinstance(k, (bytes, str)):
             contents.append(bencode(k))
             contents.append(bencode(v))
