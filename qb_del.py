@@ -223,7 +223,6 @@ class DeleteTorrents:
 
     def run(self):
         input(f'{__doc__}\n输入任意键继续:\n')
-        self.get_info_from_client()
         self.update_info()
         self.sort_torrents()
 
