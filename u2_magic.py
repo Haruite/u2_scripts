@@ -1888,7 +1888,7 @@ if use_limit:
                             _eta1 = complete_time - earliest
                             if _eta1 < 120:
                                 return
-                            earliest_up = (earliest - time() + this_time) * 5248800 + _eta1 * upspeed
+                            earliest_up = (earliest - time() + this_time) * 52428800 + _eta1 * upspeed
                             default_up = announce_interval * 52428800
                             _eta2 = complete_time - (time() + self.to.next_announce)
                             if _eta2 > 0:
