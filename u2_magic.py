@@ -38,6 +38,7 @@ import json
 import os
 import re
 import sys
+import threading
 
 import aiohttp
 import nest_asyncio
@@ -889,6 +890,7 @@ class FunctionBase:
         self.clients = []
         self.magic_tasks = []
         self.session = None
+        self._lock = threading.Lock()
 
     def print(self, st: str):
         """只输出一次信息，避免频繁输出"""
@@ -1068,11 +1070,12 @@ class FunctionBase:
 
     async def get_info_from_web(self):
         try:
-            async with aiohttp.ClientSession() as self.session:
-                page = await self.request(
-                    f'https://u2.dmhy.org/getusertorrentlistajax.php?userid={uid}&type=leeching')
+            with self._lock:
+                async with aiohttp.ClientSession() as self.session:
+                    page = await self.request(
+                        f'https://u2.dmhy.org/getusertorrentlistajax.php?userid={uid}&type=leeching')
         except Exception as e:
-            logger.exception(e)
+            logger.error(e)
         else:
             table = BeautifulSoup(page.replace('\n', ''), 'lxml').table
             tid_td = {}
@@ -1127,8 +1130,9 @@ class FunctionBase:
                     tasks.append(find_torrent_hash(td))
                 td.last_get_time = time()
             if tasks:
-                async with aiohttp.ClientSession() as self.session:
-                    await asyncio.gather(*tasks)
+                with self._lock:
+                    async with aiohttp.ClientSession() as self.session:
+                        await asyncio.gather(*tasks)
 
             self.torrent_manager.update(tid_td)
             self.torrent_manager.last_connect = time()
