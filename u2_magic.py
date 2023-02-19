@@ -557,7 +557,7 @@ if use_client:
             clients_copy.append(QBittorrent(**client_info))
 
     use_client = bool(clients)
-    use_limit = bool(limit and clients)  # 艹，一个基本配置逻辑这么绕
+    use_limit = bool(limit and clients)
 
 
 class TorrentDict(UserDict):
