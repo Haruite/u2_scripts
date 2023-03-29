@@ -522,7 +522,7 @@ if use_client:
                         logger.error(f'Failed to connect to qbittorrent on {self.host}:{self.port} due to '
                                      f'qbittorrentapi.exceptions.APIConnectionError:  {e}')
 
-                def create_torrent_status(self, torrent: qbittorrentapi._attrdict.AttrDict, keys: List[str]):
+                def create_torrent_status(self, torrent: qbittorrentapi.TorrentDictionary, keys: List[str]):
                     return {key: self.status_funcs[key](torrent) for key in keys}
 
                 if use_limit:
