@@ -259,7 +259,7 @@ class U2Web:
     @property
     def gbs(self):  # 种子体积(gb)，不是 property
         [num, unit] = self.size.split(' ')
-        _pow = ['MiB', 'GiB', 'TiB', '喵', '寄', '烫', 'MiБ', 'GiБ', 'TiБ'].index(unit) % 3
+        _pow = ['MiB', 'GiB', 'TiB', '喵', '寄', '烫', 'MiБ', 'GiБ', 'TiБ', 'egamay', 'igagay', 'eratay'].index(unit) % 3
         return float(num.replace(',', '.')) * 1024 ** (_pow - 1)
 
     def select_torrent(self):

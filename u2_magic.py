@@ -611,7 +611,8 @@ class TorrentDict(UserDict):
             [num, unit] = st.split(' ')
             _pow = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB',
                     '蚌', '氪', '喵', '寄', '烫', '皮',
-                    'Б', 'KiБ', 'MiБ', 'GiБ', 'TiБ', 'PiБ'
+                    'Б', 'KiБ', 'MiБ', 'GiБ', 'TiБ', 'PiБ',
+                    'esbytay', 'ilokay', 'egamay', 'igagay', 'eratay', 'etapay'
                     ].index(unit) % 6
             flag = 0 if flag == 0 else flag / abs(flag)
             return int((float(num.replace(',', '.')) + 0.0005 * flag) * 1024 ** _pow)
@@ -1241,8 +1242,8 @@ if magic:
                     s = total_size // 1024 ** 3 + 1
                 else:
                     [num, unit] = size.split(' ')
-                    s = 1 if unit in ['MiB', '喵', 'MiБ'] else (
-                            int(float(num) * 1024 if unit in ['TiB', '烫', 'TiБ'] else float(num)) + 1
+                    s = 1 if unit in ['MiB', '喵', 'MiБ', 'egamay'] else (
+                            int(float(num) * 1024 if unit in ['TiB', '烫', 'TiБ', 'eratay'] else float(num)) + 1
                     )
                 return m * c * pow(s, 0.5) * (pow(2 * ur - 2, 1.5) + pow(2 - 2 * dr, 2)) * pow(ttl, -0.8) * pow(h, 0.5)
 

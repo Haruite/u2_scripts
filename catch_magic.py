@@ -247,7 +247,7 @@ class CatchMagic:
         if SIZE_FILTER and not (SIZE_FILTER[0] <= 0 and SIZE_FILTER[1] == -1):
             size_str = soup.time.parent.contents[5].strip().replace(',', '.').replace('Б', 'B')
             [num, unit] = size_str.split(' ')
-            _pow = ['MiB', 'GiB', 'TiB', '喵', '寄', '烫'].index(unit) % 3
+            _pow = ['MiB', 'GiB', 'TiB', '喵', '寄', '烫', 'egamay', 'igagay', 'eratay'].index(unit) % 3
             gb = float(num) * 1024 ** (_pow - 1)
             if gb < SIZE_FILTER[0] or SIZE_FILTER[1] != -1 and gb > SIZE_FILTER[1]:
                 logger.debug(f'Torrent {tid} | torrent size {size_str} does not match, passed')
