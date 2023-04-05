@@ -5,7 +5,7 @@ Requires sys.version_info >= (3, 6)
 """
 
 from io import BufferedReader
-from typing import Union, List, Tuple, Dict
+from typing import Union
 from functools import singledispatch
 
 
@@ -38,17 +38,17 @@ def _(obj: int):
 
 
 @bencode.register
-def _(obj: List):
+def _(obj: list):
     return b"l" + b"".join(map(bencode, obj)) + b"e"
 
 
 @bencode.register
-def _(obj: Tuple):
+def _(obj: tuple):
     return b"l" + b"".join(map(bencode, obj)) + b"e"
 
 
 @bencode.register
-def _(obj: Dict):
+def _(obj: dict):
     contents = [b'd']
     for k, v in sorted(obj.items()):
         if isinstance(k, (bytes, str)):
