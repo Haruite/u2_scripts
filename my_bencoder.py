@@ -29,7 +29,8 @@ def _(obj: bytes):
 
 @bencode.register
 def _(obj: str):
-    return str(len(obj)).encode() + b":" + obj.encode()
+    obj = obj.encode()
+    return str(len(obj)).encode() + b":" + obj
 
 
 @bencode.register
