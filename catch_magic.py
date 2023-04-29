@@ -317,11 +317,9 @@ class CatchMagic:
                     for table in tables or []:
                         for tr in filter(lambda _tr: 'nowrap' in str(_tr), table):
                             if len(tr.contents) == 10:
-                                if tr.contents[0].bdo.text == user:
+                                if tr.contents[0].bdo and tr.contents[0].bdo.text == user:
                                     logger.info(f'Torrent {tid} | user {user} is seeding...')
-                                    break
-                        else:
-                            return
+                                    return 
                     logger.info(f'Torrent {tid} | user {user} is looking for help, downloading...')
                     self.dl_to(to_info)
                     return
