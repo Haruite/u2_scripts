@@ -311,17 +311,6 @@ class CatchMagic:
                 comment = magic_page_soup.legend.parent.contents[1].text
                 if '搭' in comment and '桥' in comment or '加' in comment and '速' in comment:
                     user = magic_page_soup.select('table.main bdo')[0].text
-                    peer_list = get(f'https://u2.dmhy.org/viewpeerlist.php?id={tid}', **R_ARGS).text
-                    peer_list_soup = BeautifulSoup(peer_list.replace('\n', ''), 'lxml')
-                    tables = peer_list_soup.find_all('table')
-                    for table in tables or []:
-                        for tr in filter(lambda _tr: 'nowrap' in str(_tr), table):
-                            if len(tr.contents) == 10:
-                                if tr.contents[0].bdo.text == user:
-                                    logger.info(f'Torrent {tid} | user {user} is seeding...')
-                                    break
-                        else:
-                            return
                     logger.info(f'Torrent {tid} | user {user} is looking for help, downloading...')
                     self.dl_to(to_info)
                     return
