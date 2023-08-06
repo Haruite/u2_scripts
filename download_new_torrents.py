@@ -13,13 +13,18 @@ from time import sleep, time
 from bs4 import BeautifulSoup
 from loguru import logger
 from requests import get
+from base64 import b64encode
+from deluge_client import LocalDelugeRPCClient
+
+from my_bencoder import bdecode
 
 # *************************必填配置************************
 cookies = {'nexusphp_u2': ''}
 passkey = ''
+save_path = '/de/wt'  # 存放种子文件的文件夹，可以用 bt 客户端监控
+download_location = '/de/dl'  # 存放下载内容的文件夹
 
 # ************************可修改配置***********************
-save_path = 'C:/Downloads/torrents'  # 下载文件夹，可以用 bt 客户端监控
 proxies = {  # 代理
     # 'http': 'http://127.0.0.1:10809', 'https': 'http://127.0.0.1:10809'
 }
@@ -50,7 +55,17 @@ checked = deque([], maxlen=300)
 如果去获取只有详细页才有的信息，比如 info_hash 值，会返回 None'''
 added = deque([], maxlen=300)
 '''如果某个种子的 id 在 added 里，那么筛选种子的时候会跳过'''
-
+add_client = True
+'''True 即直接添加到客户端，只支持 deluge, qb 懒得写了
+如果默认下载目录下有同名文件，则新建一个目录下载，主要是防止 rev 的种子超速
+False 则将种子下载到监控文件夹'''
+client = LocalDelugeRPCClient(
+    '127.0.0.1',  # IP
+    58846,  # daemon port
+    'localclient',  # username
+    ''  # password, cat ~/.config/deluge/auth
+)
+'add_client 为真时需要填写'
 
 # *************************END****************************
 
@@ -80,6 +95,15 @@ def get_url(url):
             return html.text
     except Exception as e:
         logger.error(e)
+
+
+def call_retry(_client, method, *args, **kwargs):
+    if not _client.connected:
+        for _ in range(5):
+            _client.reconnect()
+            logger.debug(f'Connected to deluge host ------ {_client.host}')
+            break
+    return _client.call(method, *args, **kwargs)
 
 
 detail_key_dict = {
@@ -294,22 +318,45 @@ class U2Web:
             try:
                 for self.tr in self.torrent_page():
                     if self.select_torrent():
-                        torrent = f'{save_path}/[U2].{self.tid}.torrent'
+                        sv = f'{save_path}/[U2].{self.tid}.torrent'
                         link = f'https://u2.dmhy.org/download.php?id={self.tid}&passkey={self.passkey}&https=1'
-                        with open(torrent, 'wb') as to:
-                            content = get(link, headers=headers, proxies=proxies).content
-                            to.write(content)
+                        content = get(link, headers=headers, proxies=proxies).content
+
+                        if not add_client:
+                            with open(sv, 'wb') as to:
+                                to.write(content)
+                            logger.info(f'add torrent {self.tid}')
+                        else:
+                            down_loc = download_location
+                            name = ''
+                            try:
+                                name = bdecode(content)[b'info'][b'name'].decode()
+                            except:
+                                pass
+                            if client.host in ('127.0.0.1', 'localhost'):
+                                if not name or name in os.listdir(down_loc):
+                                    i = 0
+                                    while True:
+                                        new_loc = f'{download_location}/.{i}'
+                                        if not os.path.exists(new_loc):
+                                            os.mkdir(new_loc)
+                                            down_loc = new_loc
+                                            break
+                                        if name and name not in os.listdir(new_loc):
+                                            down_loc = new_loc
+                                            break
+                                        i += 1
+                            call_retry(
+                                client,
+                                'core.add_torrent_file',
+                                f'[U2].{self.tid}.torrent',
+                                b64encode(content),
+                                {'add_paused': False, 'download_location': down_loc}
+                            )
+                            logger.info(f'Add torrent {self.tid} via DelugeClient')
+
                         added.append(self.tid)
                         write_list('added')
-                        logger.info(f'add torrent {self.tid}')
-                        '''  # 直接添加到 deluge
-                        from deluge_client import LocalDelugeRPCClient
-                        from base64 import b64encode
-                        client = LocalDelugeRPCClient('127.0.0.1', 58846, '', '')
-                        client.reconnect()
-                        client.core.add_torrent_file(
-                            f'[U2].{self.tid}.torrent', b64encode(content), {'add_paused': False})
-                        '''
                         if eval_all_keys:  # 获取种子所有信息
                             for _key in self.keys:
                                 getattr(self, _key)
