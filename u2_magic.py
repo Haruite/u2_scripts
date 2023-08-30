@@ -1910,7 +1910,6 @@ if use_limit:
                 if magic:
                     await self.magic()
                 self.to = _to
-                sleep(1)
 
                 self.to.re_announce()
                 return True
