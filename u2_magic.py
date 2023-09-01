@@ -1755,7 +1755,7 @@ if use_limit:
                             logger.debug(f'Change the max download speed of torrent {self.to.tid} '
                                          f'to {max_download_speed:.2f}K')
                 else:
-                    # 平均速度已降到 50M/s 以下，解除限速，之似乎发现 tracker 计算的时间精度比秒更精确？
+                    # 平均速度已降到 50M/s 以下，解除限速
                     # 无论如何 next_announce 是个整数必须 +1s
                     self.to.set_upload_limit(51200)
                     self.to.set_download_limit(-1)
