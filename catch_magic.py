@@ -72,7 +72,7 @@ SIZE_FILTER = [0, -1]  # type: List[Union[int, float]]
 '体积过滤，第一个数为体积最小值(GB)，第二个为最大值(GB)，-1 表示不设上限'
 NAME_FILTER = []  # type: List[str]
 '''过滤种子标题，如果标题或者文件名中包含这些字符串之一则排除不下载，多个用逗号隔开，字符串要加引号，比如 ['BDrip']'''
-R_ARGS = {'cookies': {'nexusphp_u2': COOKIES},
+R_ARGS = {'cookies': COOKIES,
           'headers': {'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
                       'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/104.0.5112.81 Safari/537.36'},
           'timeout': 20,
