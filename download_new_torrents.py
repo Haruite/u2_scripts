@@ -88,7 +88,7 @@ def write_list(name):
 
 def get_url(url):
     try:
-        html = get(url, cookies=cookies, headers=headers, proxies=proxies)
+        html = get(url, cookies=cookies, headers=headers, proxies=proxies, timeout=20)
         if html.status_code < 400:
             if url != 'https://u2.dmhy.org/torrents.php':
                 logger.info(f'download page {url}')
