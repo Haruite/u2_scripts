@@ -1106,6 +1106,7 @@ class FunctionBase:
                         td.promotion = tw.promotion
                     tw.update(td)
                     tw.last_get_time = time()
+                    tw.update_fail_count = 0  # 更新上传量成功
                     tid_td.pop(tid)
                 else:
                     self.torrent_manager.pop(tid)
@@ -1682,6 +1683,10 @@ if use_limit:
                 if not self.to.get('ex'):
                     continue
 
+                if self.to.update_fail_count and self.to.update_fail_count > 2:
+                    # 有可能种子已被删除
+                    continue
+
                 if 'date' not in self.to:  # 按理说是不会有这种情况的
                     logger.error(f"Could not find 'date' of torrent {self.to.tid}")
                     continue
@@ -1692,11 +1697,17 @@ if use_limit:
                 if time() - self.to.this_time + 1 > self.to.last_get_time and f1 == 0:
                     # 刚汇报完，更新上次汇报的上传量
                     if self.to.total_uploaded > 0:
+                        last_get_time = self.to.last_get_time
                         try:
                             await self.update_upload()
                             f1 = 1
                         except:
                             pass
+                        if self.to.last_get_time == last_get_time:
+                            # 更新上传量失败，设置标记update_fail_count，如果连续失败3次，种子可能已被删除，
+                            # 不再继续更新，也不再限速。如果是因为暂时的网络原因，
+                            # 下一次get_info_from_web更新上传量时会清除失败计数。
+                            self.to.update_fail_count = self.to.get("update_fail_count", 0) + 1
 
                 if variable_announce_interval:
                     await self.optimize_announce_time()
