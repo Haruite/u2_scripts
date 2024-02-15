@@ -33,6 +33,7 @@ async def aux_seed(torrent: qbittorrentapi.TorrentDictionary, session: aiohttp.C
     if 'daydream.dmhy.best' not in torrent.magnet_uri:
         info_dict = bdecode(bt_backup + '/' + torrent.hash + '.torrent')[b'info']
         info_dict[b'source'] = '[u2.dmhy.org] U2分享園@動漫花園'
+        info_dict[b'private'] = 1
         torrent_hash = sha1(bencode(info_dict)).hexdigest()
         params = {'uid': uid, 'token': token, 'hash': torrent_hash}
 
