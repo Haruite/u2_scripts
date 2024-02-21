@@ -185,7 +185,7 @@ class DeleteTorrents:
                     f'预计秒收 {ms1:.3f} UCoin, 平均效率 {avg:.3f}'
                 )
             else:
-                self.client.torrents_delete(delete_files=True, delete_hashes=delete_hashes)
+                self.client.torrents_delete(delete_files=True, torrent_hashes=delete_hashes)
                 fn = f"{os.path.splitext(__file__)[0]}.delete_hashes.{datetime.now().__str__().replace(':', '-')}.txt"
                 with open(fn, 'a') as fp:
                     json.dump(delete_hashes, fp)
