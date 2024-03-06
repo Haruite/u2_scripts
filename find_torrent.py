@@ -1,30 +1,28 @@
 """
 根据根目录名添加种子，适用于种子数据丢失或者辅种
 """
-
+import asyncio
 import json
 import os
 from time import sleep
 
 from typing import Dict
 
+import aiohttp
 import qbittorrentapi
-import requests
 from loguru import logger
 
-rename = True  # 是否改名
+rename = False  # 是否改名
 always_add = False  # 检测到种子缺失文件，是否任然添加(校验后需要下载)
-host = 'localhost'
-port = 8080
-username = ''
-password = ''
-token = '7'
-uid = 50096
-passkey = ''
-src_path = 'G:\\BDMV'
-proxies = {
-    # 'http': 'http://127.0.0.1:10809', 'https': 'http://127.0.0.1:10809'
-}
+host = 'localhost'  # qb 主机 ip
+port = 8080  # qb 端口
+username = ''  # qb webui 用户名
+password = ''  # qb webui 密码
+token = ''  # 三方 api token，获取: https://greasyfork.org/zh-CN/scripts/428545
+uid = 50096  # 自己的 uid
+passkey = ''  # passkey
+src_path = 'G:\\BDMV'  # 包含种子内容的文件
+proxy = ''  # 'http://127.0.0.1:10809'  # 代理
 char_map = {
     '?': '？',
     '*': '٭',
@@ -35,8 +33,8 @@ char_map = {
     '/': '／',
     '\\': '／',
     '|': '￨'
-}
-os_rename = True
+}  # Windows 不支持字符的替换规则
+os_rename = True  # 是否直接通过 os 重命名文件夹而不是使用 qb 重命名
 
 logger.add(sink=f'{os.getcwd()}\\logs\\find_torrent-{{time}}.log', level='DEBUG')
 client = qbittorrentapi.Client(host=host, port=port, username=username, password=password)
@@ -66,11 +64,12 @@ def check_files(path: str, torrent_tree: Dict):
 hashes = {torrent.hash for torrent in client.torrents_info(status_filter='completed')}
 
 
-for fn in os.listdir(src_path):
+async def find_torrent(fn: str, session: aiohttp.ClientSession, sem: asyncio.Semaphore):
     data = {'uid': uid, 'token': token, 'torrent_name': fn}
-    _json = requests.post(
-        'https://u2.kysdm.com/api/v1/search_torrent_name', data=json.dumps(data), proxies=proxies).json()
-    torrents = _json['data']['torrents']
+    async with sem:
+        async with session.post('https://u2.kysdm.com/api/v1/search_torrent_name', json=data, proxy=proxy) as response:
+            _json = await response.json()
+            torrents = _json['data']['torrents']
     if torrents:
         for torrent in torrents:
             if not torrent['torrent_tree']:
@@ -86,7 +85,10 @@ for fn in os.listdir(src_path):
                 else:
                     dl_link = f'https://u2.dmhy.org/download.php?id={tid}&passkey={passkey}&https=1'
                     try:
-                        content = requests.get(dl_link, proxies=proxies).content
+                        async with sem:
+                            print(dl_link)
+                            async with session.get(dl_link, proxy=proxy) as response:
+                                content = await response.read()
                         client.torrents_add(torrent_files=content, save_path=src_path, is_paused=True)
                     except Exception as e:
                         logger.error(e)
@@ -117,6 +119,20 @@ for fn in os.listdir(src_path):
                             logger.error(e)
                 break
         else:
-            logger.warning(f'文件名 {fn} 缺少文件， 可能的种子 id 有 {tuple(torrent["torrent_id"] for torrent in torrents)}')
+            logger.warning(
+                f'文件名 {fn} 缺少文件， 可能的种子 id 有 {tuple(torrent["torrent_id"] for torrent in torrents)}')
     else:
         logger.debug(f'文件名 {fn} 未搜索到对应的种子')
+
+
+async def main():
+    tasks = []
+    sem = asyncio.Semaphore(20)
+    async with aiohttp.ClientSession() as session:
+        for fn in os.listdir(src_path):
+            tasks.append(asyncio.ensure_future(find_torrent(fn, session, sem)))
+        await asyncio.gather(*tasks)
+
+
+if __name__ == '__main__':
+    asyncio.run(main())
