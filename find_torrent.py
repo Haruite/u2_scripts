@@ -86,14 +86,13 @@ async def find_torrent(fn: str, session: aiohttp.ClientSession, sem: asyncio.Sem
                     dl_link = f'https://u2.dmhy.org/download.php?id={tid}&passkey={passkey}&https=1'
                     try:
                         async with sem:
-                            print(dl_link)
                             async with session.get(dl_link, proxy=proxy) as response:
                                 content = await response.read()
                         client.torrents_add(torrent_files=content, save_path=src_path, is_paused=True)
                     except Exception as e:
                         logger.error(e)
                     logger.info(f'已添加种子, id 为 {tid}')
-                    sleep(0.1)  # 如果不 sleep 可能报错没有这个种子
+                    await asyncio.sleep(0.1)  # 如果不 sleep 可能报错没有这个种子
 
                 if rename:
                     title = ''.join(char_map.get(char) or char for char in torrent['title'])
