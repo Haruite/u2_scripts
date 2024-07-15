@@ -245,10 +245,10 @@ class Qbittorrent(qbittorrentapi.Client, BtClient):
         return torrents_info
 
     def active_torrents_info(self, keys):
-        return self.fix_return_value(self.call('torrents_info', status_filter=['active']), keys)
+        return self.fix_return_value(self.call('torrents_info', status_filter='active'), keys)
 
     def seeding_torrents_info(self, keys):
-        return self.fix_return_value(self.call('torrents_info', status_filter=['seeding']), keys)
+        return self.fix_return_value(self.call('torrents_info', status_filter='seeding'), keys)
 
 
 class Transmission(transmission_rpc.Client, BtClient):
