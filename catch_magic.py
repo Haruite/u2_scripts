@@ -230,6 +230,9 @@ class CatchMagic:
     def analyze_magic(self, magic_id, tid):
         soup = self.get_soup(f'https://u2.dmhy.org/details.php?id={tid}')
         aa = soup.select('a.index')
+        if len(aa) < 2:
+            logger.info(f'Torrent {tid} | torrent deleted, passed')
+            return
         to_info = {'to_name': aa[0].text[5:-8], 'dl_link': f"https://u2.dmhy.org/{aa[1]['href']}"}
 
         if NAME_FILTER:
