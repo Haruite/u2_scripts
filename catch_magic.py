@@ -349,7 +349,7 @@ def main(catch):
     for _ in range(RUN_TIMES):
         try:
             catch.run()
-        except ReadTimeout as e:
+        except Exception as e:
             logger.error(e)
         finally:
             if _ != RUN_TIMES - 1 or not RUN_CRONTAB:
