@@ -818,6 +818,7 @@ class TorrentWrapper:
                 logger.error(e)
                 return
 
+            updated = False
             for table in tables or []:
                 for tr in filter(lambda _tr: 'nowrap' in str(_tr), table):
                     if tr.get('bgcolor'):
@@ -846,8 +847,12 @@ class TorrentWrapper:
                         if self.last_announce_time:
                             idle = reduce(lambda a, b: a * 60 + b, map(int, tr.contents[10].string.split(':')))
                             self.last_announce_time = time() - idle
+                            updated = True
 
                         break
+
+            if self.last_announce_time and not updated and time() > self.last_announce_time + self.announce_interval:
+                self.last_announce_time += self.announce_interval
 
     if use_limit:
         def set_upload_limit(self, rate):
