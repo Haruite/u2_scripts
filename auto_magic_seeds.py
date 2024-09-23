@@ -277,7 +277,7 @@ class Transmission(transmission_rpc.Client, BtClient):
 
     def active_torrents_info(self, keys: List[str]):
         return {torrent.hashString: self.keys_to_dict(keys, torrent)
-                for torrent in self.call('get_torrents') if torrent.rateUpload > 0}
+                for torrent in self.call('get_torrents') if torrent.rate_upload > 0}
 
     def seeding_torrents_info(self, keys: List[str]):
         return {torrent.hashString: self.keys_to_dict(keys, torrent)
