@@ -253,7 +253,7 @@ class Qbittorrent(qbittorrentapi.Client, BtClient):
 
 class Transmission(transmission_rpc.Client, BtClient):
     de_key_to_tr = {'name': 'name', 'total_size': 'total_size',
-                    'upload_payload_rate': 'rateUpload', 'state': 'status'}
+                    'upload_payload_rate': 'rate_upload', 'state': 'status'}
 
     def __init__(self, host='http://127.0.0.1', port=9091, username='', password=''):
         super().__init__(host=host, port=port, username=username, password=password, timeout=10)
@@ -267,19 +267,19 @@ class Transmission(transmission_rpc.Client, BtClient):
         except (TransmissionTimeoutError, TransmissionConnectError) as e:
             logger.error(f'Error when connect to transmission client on {self.host}:{self.port} | {e}')
 
-    def keys_to_dict(self, keys, torrent):
+    def keys_to_dict(self, keys: List[str], torrent: transmission_rpc.Torrent):
         res = {key: torrent.__getattribute__(self.de_key_to_tr[key]) for key in keys if key in self.de_key_to_tr}
         if 'tracker' in keys:
-            res['tracker'] = torrent.trackers[0]['announce'] if torrent.trackers else None
+            res['tracker'] = torrent.trackers[0].announce if torrent.trackers else None
         if 'total_seeds' in keys:
-            res['total_seeds'] = torrent.trackerStats[0]['seederCount'] if torrent.trackerStats else 99999
+            res['total_seeds'] = torrent.tracker_stats[0].seeder_count if torrent.tracker_stats else 99999
         return res
 
-    def active_torrents_info(self, keys):
+    def active_torrents_info(self, keys: List[str]):
         return {torrent.hashString: self.keys_to_dict(keys, torrent)
                 for torrent in self.call('get_torrents') if torrent.rateUpload > 0}
 
-    def seeding_torrents_info(self, keys):
+    def seeding_torrents_info(self, keys: List[str]):
         return {torrent.hashString: self.keys_to_dict(keys, torrent)
                 for torrent in self.call('get_torrents') if torrent.status == 'seeding'}
 
