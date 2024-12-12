@@ -280,7 +280,11 @@ class CatchMagic:
                 if seeder_count > MAX_SEEDER_NUM:
                     logger.debug(f'Torrent {tid} | seeders > {MAX_SEEDER_NUM}, passed')
                 else:
-                    self.dl_to(to_info)
+                    if [self.get_pro(tr.contents[1])[1] for tr in soup.find('table', {'width': '90%'})
+                        if tr.td.text in ['流量优惠', '流量優惠', 'Promotion', 'Тип раздачи (Бонусы)']][0] > 0:
+                        logger.debug(f'torrent {tid} | is not free, passed')
+                    else:
+                        self.dl_to(to_info)
             else:
                 logger.debug(f'Torrent {tid} | time < {MIN_DAY} days, passed')
             return
