@@ -79,13 +79,15 @@ R_ARGS = {'cookies': COOKIES,
           'proxies': PROXIES
           }
 'requests 模块参数'
+MIN_ADD_INTERVAL = 0  # type: Union[int, float]
+'重复添加同一种子的最小时间间隔(s)'
 
 
 class CatchMagic:
     pre_suf = [['时区', '，点击修改。'], ['時區', '，點擊修改。'], ['Current timezone is ', ', click to change.']]
 
     def __init__(self):
-        self.checked, self.magic_id_0 = deque([], maxlen=200), None
+        self.checked, self.magic_id_0, self.tid_add_time = deque([], maxlen=200), None, {}
         with open(DATA_PATH, 'a', encoding='utf-8'):
             pass
         with open(DATA_PATH, 'r', encoding='utf-8') as fp:
@@ -93,6 +95,7 @@ class CatchMagic:
                 data = json.load(fp)
                 self.checked = deque(data['checked'], maxlen=200)
                 self.magic_id_0 = data['id_0']
+                self.tid_add_time = data['add_time']
             except json.JSONDecodeError:
                 pass
         self.first_time = True
@@ -173,11 +176,16 @@ class CatchMagic:
 
         if self.magic_id_0 != id_0:
             with open(f'{DATA_PATH}', 'w', encoding='utf-8') as fp:
-                json.dump({'checked': list(self.checked), 'id_0': self.magic_id_0}, fp)
+                json.dump({'checked': list(self.checked), 'id_0': self.magic_id_0,
+                           'add_time': self.tid_add_time}, fp)
         self.first_time = False
 
     def dl_to(self, to_info):
         tid = to_info['dl_link'].split('&passkey')[0].split('id=')[1]
+
+        if tid in self.tid_add_time:
+            if time() - self.tid_add_time[tid] < MIN_ADD_INTERVAL:
+                logger.info(f'Torrent {tid} | You have downloaded this torrent < {MIN_ADD_INTERVAL} s')
 
         if CHECK_PEERLIST and to_info['last_dl_time']:
             peer_list = self.get_soup(f'https://u2.dmhy.org/viewpeerlist.php?id={tid}')
@@ -199,6 +207,7 @@ class CatchMagic:
 
         shutil.copy(f'{BK_DIR}/[U2].{tid}.torrent', f'{WT_DIR}/[U2].{tid}.torrent')
         logger.info(f"Download torrent {tid}, name {to_info['to_name']}")
+        self.tid_add_time[tid] = time()
 
     @classmethod
     def get_tz(cls, soup):
@@ -345,7 +354,8 @@ class CatchMagic:
                 if error:
                     self.magic_id_0 = id_0
                 with open(f'{DATA_PATH}', 'w', encoding='utf-8') as fp:
-                    json.dump({'checked': list(self.checked), 'id_0': self.magic_id_0}, fp)
+                    json.dump({'checked': list(self.checked), 'id_0': self.magic_id_0,
+                               'add_time': self.tid_add_time}, fp)
 
 
 @logger.catch()
