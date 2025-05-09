@@ -64,7 +64,7 @@ cookies = {'nexusphp_u2': ''}  # type: Dict[str, str]
 proxy = ''  # type: str
 '网络代理'
 magic = True  # type: Any
-'魔法的总开关，为真不施加任何魔法，否则至少会给旧种施加魔法'
+'魔法的总开关，为真至少会给旧种施加魔法，否则不释放任何魔法'
 magic_new = True  # type: Any
 '只有为真才会给新种施加魔法'
 limit = True  # type: Any
