@@ -173,11 +173,11 @@ def generate_remux_cmd(track_count, track_info, flac_files, output_file, mkv_fil
     pcm_track_count = 0
     language_options = []
     for _ in range(track_count + 1):
-        if _ + 1 in track_info:
+        if _ in track_info:
             pcm_track_count += 1
             tracker_order.append(f'{pcm_track_count}:0')
             audio_tracks.append(str(_))
-            language_options.append(f'--language 0:{track_info[_ + 1]} "{flac_files[pcm_track_count - 1]}"')
+            language_options.append(f'--language 0:{track_info[_]} "{flac_files[pcm_track_count - 1]}"')
         else:
             tracker_order.append(f'0:{_}')
     tracker_order = ','.join(tracker_order)
