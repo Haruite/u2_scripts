@@ -410,8 +410,10 @@ for file in os.listdir(movie_folder):
                         file1_path = os.path.join(dst_folder, file1)
                         if file1_path != output_file:
                             if file1_path.endswith('.wav'):
+                                n = len(os.listdir(dst_folder))
                                 subprocess.Popen(f'"{flac_path}" -8 -j {flac_threads} "{file1_path}"').wait()
-                                os.remove(file1_path)
+                                if len(os.listdir(file1_path)) > n:
+                                    os.remove(file1_path)
                             else:
                                 wav_file = os.path.splitext(file1_path)[0] + '.wav'
                                 subprocess.Popen(f'ffmpeg -i "{file1_path}"  -c:a pcm_s16le -f w64 "{wav_file}"').wait()
@@ -423,13 +425,27 @@ for file in os.listdir(movie_folder):
                         file1_path = os.path.join(dst_folder, file1)
                         if file1_path.endswith('.flac'):
                             flac_files.append(file1_path)
-                    output_file1 = os.path.join(dst_folder, os.path.splitext(output_file)[0] + '(1).mkv')
-                    remux_cmd = generate_remux_cmd(track_count, track_info, flac_files, output_file1, output_file)
-                    subprocess.Popen(remux_cmd).wait()
-                    os.remove(output_file)
-                    os.rename(output_file1, output_file)
-                    for flac_file in flac_files:
-                        os.remove(flac_file)
+                    if not flac_files:
+                        for file1 in os.listdir(dst_folder):
+                            file1_path = os.path.join(dst_folder, file1)
+                            if file1_path != output_file:
+                                if file1_path.endswith('.wav'):
+                                    n = len(os.listdir(dst_folder))
+                                    subprocess.Popen(f'ffmpeg -i "{file1_path}" -c:a flac "{file1_path.removesuffix(".wav") + ".flac"}"').wait()
+                                    if len(os.listdir(file1_path)) > n:
+                                        os.remove(file1_path)
+                        for file1 in os.listdir(dst_folder):
+                            file1_path = os.path.join(dst_folder, file1)
+                            if file1_path.endswith('.flac'):
+                                flac_files.append(file1_path)
+                    if flac_files:
+                        output_file1 = os.path.join(dst_folder, os.path.splitext(output_file)[0] + '(1).mkv')
+                        remux_cmd = generate_remux_cmd(track_count, track_info, flac_files, output_file1, output_file)
+                        subprocess.Popen(remux_cmd).wait()
+                        os.remove(output_file)
+                        os.rename(output_file1, output_file)
+                        for flac_file in flac_files:
+                            os.remove(flac_file)
 
                 sps_folder = os.path.join(dst_folder, 'SPs')
                 os.mkdir(sps_folder)
@@ -463,23 +479,38 @@ for file in os.listdir(movie_folder):
                             file1_path = os.path.join(sps_folder, file1)
                             if file1_path != mkv_file and file1_path.startswith(mkv_file.removesuffix('.mkv')):
                                 if file1_path.endswith('.wav'):
+                                    n = len(os.listdir(sps_folder))
                                     subprocess.Popen(f'"{flac_path}" -8 -j {flac_threads} "{file1_path}"').wait()
-                                    os.remove(file1_path)
+                                    if len(os.listdir(sps_folder)) > n:
+                                        os.remove(file1_path)
                                 else:
                                     wav_file = os.path.splitext(file1_path)[0] + '.wav'
                                     subprocess.Popen(f'ffmpeg -i "{file1_path}"  -c:a pcm_s16le -f w64 "{wav_file}"').wait()
                                     os.remove(file1_path)
-                                    subprocess.Popen(f'flac -8 {flac_threads} 16 "{wav_file}"').wait()
+                                    subprocess.Popen(f'flac -8 -j {flac_threads} "{wav_file}"').wait()
                                     os.remove(wav_file)
                         flac_files = []
                         for file1 in os.listdir(sps_folder):
                             if file1.endswith('.flac'):
                                 flac_files.append(os.path.join(sps_folder, file1))
-                        output_file = os.path.join(sps_folder, os.path.splitext(sp)[0] + '(1).mkv')
-                        remux_cmd = generate_remux_cmd(track_count, track_info, flac_files, output_file, mkv_file)
-                        print(f'混流命令: {remux_cmd}')
-                        subprocess.Popen(remux_cmd).wait()
-                        os.remove(mkv_file)
-                        os.rename(output_file, mkv_file)
-                        for flac_file in flac_files:
-                            os.remove(flac_file)
+                        if not flac_files:
+                            for file1 in os.listdir(sps_folder):
+                                file1_path = os.path.join(sps_folder, file1)
+                                if file1_path != mkv_file and file1_path.startswith(mkv_file.removesuffix('.mkv')):
+                                    if file1_path.endswith('.wav'):
+                                        n = len(os.listdir(sps_folder))
+                                        subprocess.Popen(f'ffmpeg -i "{file1_path}" -c:a flac "{file1_path.removesuffix(".wav") + ".flac"}"').wait()
+                                        if len(os.listdir(sps_folder)) > n:
+                                            os.remove(file1_path)
+                            for file1 in os.listdir(sps_folder):
+                                if file1.endswith('.flac'):
+                                    flac_files.append(os.path.join(sps_folder, file1))
+                        if flac_files:
+                            output_file = os.path.join(sps_folder, os.path.splitext(sp)[0] + '(1).mkv')
+                            remux_cmd = generate_remux_cmd(track_count, track_info, flac_files, output_file, mkv_file)
+                            print(f'混流命令: {remux_cmd}')
+                            subprocess.Popen(remux_cmd).wait()
+                            os.remove(mkv_file)
+                            os.rename(output_file, mkv_file)
+                            for flac_file in flac_files:
+                                os.remove(flac_file)
