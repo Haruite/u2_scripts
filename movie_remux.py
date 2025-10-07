@@ -412,13 +412,13 @@ for file in os.listdir(movie_folder):
                             if file1_path.endswith('.wav'):
                                 n = len(os.listdir(dst_folder))
                                 subprocess.Popen(f'"{flac_path}" -8 -j {flac_threads} "{file1_path}"').wait()
-                                if len(os.listdir(file1_path)) > n:
+                                if len(os.listdir(dst_folder)) > n:
                                     os.remove(file1_path)
                             else:
                                 wav_file = os.path.splitext(file1_path)[0] + '.wav'
                                 n = len(os.listdir(dst_folder))
                                 subprocess.Popen(f'ffmpeg -i "{file1_path}"  -c:a pcm_s24le -f w64 "{wav_file}"').wait()
-                                if len(os.listdir(file1_path)) == n:
+                                if len(os.listdir(dst_folder)) == n:
                                     subprocess.Popen(
                                         f'ffmpeg -i "{file1_path}"  -c:a pcm_s16le -f w64 "{wav_file}"').wait()
                                 os.remove(file1_path)
@@ -436,7 +436,7 @@ for file in os.listdir(movie_folder):
                                 if file1_path.endswith('.wav'):
                                     n = len(os.listdir(dst_folder))
                                     subprocess.Popen(f'ffmpeg -i "{file1_path}" -c:a flac "{file1_path.removesuffix(".wav") + ".flac"}"').wait()
-                                    if len(os.listdir(file1_path)) > n:
+                                    if len(os.listdir(dst_folder)) > n:
                                         os.remove(file1_path)
                         for file1 in os.listdir(dst_folder):
                             file1_path = os.path.join(dst_folder, file1)
