@@ -416,7 +416,11 @@ for file in os.listdir(movie_folder):
                                     os.remove(file1_path)
                             else:
                                 wav_file = os.path.splitext(file1_path)[0] + '.wav'
-                                subprocess.Popen(f'ffmpeg -i "{file1_path}"  -c:a pcm_s16le -f w64 "{wav_file}"').wait()
+                                n = len(os.listdir(dst_folder))
+                                subprocess.Popen(f'ffmpeg -i "{file1_path}"  -c:a pcm_s24le -f w64 "{wav_file}"').wait()
+                                if len(os.listdir(file1_path)) == n:
+                                    subprocess.Popen(
+                                        f'ffmpeg -i "{file1_path}"  -c:a pcm_s16le -f w64 "{wav_file}"').wait()
                                 os.remove(file1_path)
                                 subprocess.Popen(f'flac -8 -j {flac_threads} "{wav_file}"').wait()
                                 os.remove(wav_file)
@@ -485,7 +489,10 @@ for file in os.listdir(movie_folder):
                                         os.remove(file1_path)
                                 else:
                                     wav_file = os.path.splitext(file1_path)[0] + '.wav'
-                                    subprocess.Popen(f'ffmpeg -i "{file1_path}"  -c:a pcm_s16le -f w64 "{wav_file}"').wait()
+                                    n = len(os.listdir(sps_folder))
+                                    subprocess.Popen(f'ffmpeg -i "{file1_path}"  -c:a pcm_s24le -f w64 "{wav_file}"').wait()
+                                    if len(os.listdir(sps_folder)) == n:
+                                        subprocess.Popen(f'ffmpeg -i "{file1_path}"  -c:a pcm_s16le -f w64 "{wav_file}"').wait()
                                     os.remove(file1_path)
                                     subprocess.Popen(f'flac -8 -j {flac_threads} "{wav_file}"').wait()
                                     os.remove(wav_file)
