@@ -416,7 +416,7 @@ for file in os.listdir(movie_folder):
                                     os.remove(file1_path)
                             else:
                                 flac_file = os.path.splitext(file1_path)[0] + '.flac'
-                                subprocess.Popen(f'ffmpeg -i "{file1_path}" -c:a flac -compression_level 12 -map 0:a:0 "{flac_file}"')
+                                subprocess.Popen(f'ffmpeg -i "{file1_path}" -c:a flac -compression_level 12 -map 0:a:0 "{flac_file}"').wait()
                                 os.remove(file1_path)
                     flac_files = []
                     for file1 in os.listdir(dst_folder):
@@ -483,7 +483,7 @@ for file in os.listdir(movie_folder):
                                         os.remove(file1_path)
                                 else:
                                     flac_file = os.path.splitext(file1_path)[0] + '.flac'
-                                    subprocess.Popen(f'ffmpeg -i "{file1_path}" -c:a flac -compression_level 12 -map 0:a:0 "{flac_file}"')
+                                    subprocess.Popen(f'ffmpeg -i "{file1_path}" -c:a flac -compression_level 12 -map 0:a:0 "{flac_file}"').wait()
                                     os.remove(file1_path)
                         flac_files = []
                         for file1 in os.listdir(sps_folder):
