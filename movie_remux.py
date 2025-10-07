@@ -286,8 +286,10 @@ for file in os.listdir(movie_folder):
                         for in_out_time in chapter.in_out_time:
                             if in_out_time[0] not in stream_files:
                                 total_size += os.path.getsize(os.path.join(root, 'BDMV', 'STREAM', f'{in_out_time[0]}.m2ts'))
+                                # 计算播放列表文件总体积(重复文件只计算一次)
                             stream_files.add(in_out_time[0])
                         indicator = chapter.get_total_time_no_repeat() * (1 + sum(map(len, chapter.mark_info.values())) / 5) * os.path.getsize(mpls_file) * total_size
+                        # 有些播放列表轨道信息不全，所以这里乘了mpls的体积，选取mpls体积最大的
                         if indicator >= max_indicator:
                             max_indicator = indicator
                             selected_mpls = mpls_file
@@ -351,6 +353,7 @@ for file in os.listdir(movie_folder):
                 cover = ''
                 cover_size = 0
                 for filename in os.listdir(meta_folder):
+                    # 获取附件Cover
                     if filename.endswith('.jpg') or filename.endswith('.JPG') or filename.endswith('.JPEG') or filename.endswith('.jpeg') or filename.endswith('.png') or filename.endswith('.PNG'):
                         if os.path.getsize(os.path.join(meta_folder, filename)) > cover_size:
                             cover = os.path.join(meta_folder, filename)
@@ -358,6 +361,7 @@ for file in os.listdir(movie_folder):
                 if not os.path.exists(meta_folder):
                     output_name = os.path.split(mpls_folder[:-14])[-1]
                 else:
+                    # 获取输出文件名
                     output_name = ''
                     for filename in os.listdir(meta_folder):
                         if filename == 'bdmt_eng.xml':
@@ -415,9 +419,19 @@ for file in os.listdir(movie_folder):
                                 if len(os.listdir(dst_folder)) > n:
                                     os.remove(file1_path)
                             else:
-                                flac_file = os.path.splitext(file1_path)[0] + '.flac'
-                                subprocess.Popen(f'ffmpeg -i "{file1_path}" -c:a flac -compression_level 12 -map 0:a:0 "{flac_file}"').wait()
+                                wav_file = os.path.splitext(file1_path)[0] + '.wav'
+                                n = len(os.listdir(dst_folder))
+                                subprocess.Popen(f'ffmpeg -i "{file1_path}"  -c:a pcm_s24le -f w64 "{wav_file}"').wait()
+                                if len(os.listdir(dst_folder)) == n:
+                                    subprocess.Popen(f'ffmpeg -i "{file1_path}"  -c:a pcm_s16le -f w64 "{wav_file}"').wait()
+                                subprocess.Popen(f'flac -8 -j {flac_threads} "{wav_file}"').wait()
+                                for file2 in os.listdir(dst_folder):
+                                    if file2.endswith('.flac'):
+                                        flac_file = os.path.join(dst_folder, file2)
+                                        if os.path.getsize(flac_file) > os.path.getsize(file1_path):
+                                            os.remove(flac_file)
                                 os.remove(file1_path)
+                                os.remove(wav_file)
                     flac_files = []
                     for file1 in os.listdir(dst_folder):
                         file1_path = os.path.join(dst_folder, file1)
@@ -482,9 +496,22 @@ for file in os.listdir(movie_folder):
                                     if len(os.listdir(sps_folder)) > n:
                                         os.remove(file1_path)
                                 else:
-                                    flac_file = os.path.splitext(file1_path)[0] + '.flac'
-                                    subprocess.Popen(f'ffmpeg -i "{file1_path}" -c:a flac -compression_level 12 -map 0:a:0 "{flac_file}"').wait()
+                                    # ffmpeg直接转flac太慢，先将dts转成wav，再将wav转成flac
+                                    wav_file = os.path.splitext(file1_path)[0] + '.wav'
+                                    n = len(os.listdir(sps_folder))
+                                    subprocess.Popen(
+                                        f'ffmpeg -i "{file1_path}"  -c:a pcm_s24le -f w64 "{wav_file}"').wait()
+                                    if len(os.listdir(sps_folder)) == n:
+                                        subprocess.Popen(f'ffmpeg -i "{file1_path}"  -c:a pcm_s16le -f w64 "{wav_file}"').wait()
+                                    subprocess.Popen(f'flac -8 -j {flac_threads} "{wav_file}"').wait()
+                                    for file2 in os.listdir(dst_folder):
+                                        if file2.endswith('.flac'):
+                                            flac_file = os.path.join(dst_folder, file2)
+                                            if os.path.getsize(flac_file) > os.path.getsize(file1_path):
+                                                # 如果转换出来的flac体积比dts体积大则舍弃，这种情况很常见
+                                                os.remove(flac_file)
                                     os.remove(file1_path)
+                                    os.remove(wav_file)
                         flac_files = []
                         for file1 in os.listdir(sps_folder):
                             if file1.endswith('.flac'):
