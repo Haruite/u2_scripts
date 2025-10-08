@@ -460,7 +460,7 @@ for file in os.listdir(movie_folder):
                             os.remove(flac_file)
 
                 sps_folder = os.path.join(dst_folder, 'SPs')
-                os.mkdir(sps_folder)
+                os.makedirs(sps_folder, exist_ok=True)
                 index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(Chapter(selected_mpls))
                 parsed_m2ts_files = set(index_to_m2ts.values())
                 sp_index = 0
