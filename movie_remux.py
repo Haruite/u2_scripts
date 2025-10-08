@@ -352,15 +352,15 @@ for file in os.listdir(movie_folder):
                 meta_folder = os.path.join(os.path.join(mpls_folder[:-9], 'META', 'DL'))
                 cover = ''
                 cover_size = 0
-                for filename in os.listdir(meta_folder):
-                    # 获取附件Cover
-                    if filename.endswith('.jpg') or filename.endswith('.JPG') or filename.endswith('.JPEG') or filename.endswith('.jpeg') or filename.endswith('.png') or filename.endswith('.PNG'):
-                        if os.path.getsize(os.path.join(meta_folder, filename)) > cover_size:
-                            cover = os.path.join(meta_folder, filename)
-                            cover_size = os.path.getsize(os.path.join(meta_folder, filename))
                 if not os.path.exists(meta_folder):
                     output_name = os.path.split(mpls_folder[:-14])[-1]
                 else:
+                    for filename in os.listdir(meta_folder):
+                        # 获取附件Cover
+                        if filename.endswith('.jpg') or filename.endswith('.JPG') or filename.endswith('.JPEG') or filename.endswith('.jpeg') or filename.endswith('.png') or filename.endswith('.PNG'):
+                            if os.path.getsize(os.path.join(meta_folder, filename)) > cover_size:
+                                cover = os.path.join(meta_folder, filename)
+                                cover_size = os.path.getsize(os.path.join(meta_folder, filename))
                     # 获取输出文件名
                     output_name = ''
                     for filename in os.listdir(meta_folder):
