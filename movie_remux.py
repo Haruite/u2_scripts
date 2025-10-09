@@ -438,12 +438,10 @@ for file in os.listdir(movie_folder):
                                 wav_file = os.path.splitext(file1_path)[0] + '.wav'
                                 n = len(os.listdir(dst_folder))
                                 subprocess.Popen(f'ffmpeg -i "{file1_path}"  -c:a pcm_s{bits}le -f w64 "{wav_file}"').wait()
-                                subprocess.Popen(f'flac -8 -j {flac_threads} "{wav_file}"').wait()
-                                for file2 in os.listdir(dst_folder):
-                                    if file2.endswith('.flac'):
-                                        flac_file = os.path.join(dst_folder, file2)
-                                        if os.path.getsize(flac_file) > os.path.getsize(file1_path):
-                                            os.remove(flac_file)
+                                flac_file = os.path.splitext(file1_path)[0] + '.flac'
+                                subprocess.Popen(f'flac -8 -j {flac_threads} "{wav_file}" -o "{flac_file}"').wait()
+                                if os.path.getsize(flac_file) > os.path.getsize(file1_path):
+                                    os.remove(flac_file)
                                 os.remove(file1_path)
                                 os.remove(wav_file)
                     flac_files = []
@@ -529,13 +527,11 @@ for file in os.listdir(movie_folder):
                                     wav_file = os.path.splitext(file1_path)[0] + '.wav'
                                     n = len(os.listdir(sps_folder))
                                     subprocess.Popen(f'ffmpeg -i "{file1_path}"  -c:a pcm_s{bits}le -f w64 "{wav_file}"').wait()
-                                    subprocess.Popen(f'flac -8 -j {flac_threads} "{wav_file}"').wait()
-                                    for file2 in os.listdir(dst_folder):
-                                        if file2.endswith('.flac'):
-                                            flac_file = os.path.join(dst_folder, file2)
-                                            if os.path.getsize(flac_file) > os.path.getsize(file1_path):
-                                                # 如果转换出来的flac体积比dts体积大则舍弃，这种情况很常见
-                                                os.remove(flac_file)
+                                    flac_file = os.path.splitext(file1_path)[0] + '.flac'
+                                    subprocess.Popen(f'flac -8 -j {flac_threads} "{wav_file}" -o "{flac_file}"').wait()
+                                    if os.path.getsize(flac_file) > os.path.getsize(file1_path):
+                                        # 如果转换出来的flac体积比dts体积大则舍弃，这种情况很常见
+                                        os.remove(flac_file)
                                     os.remove(file1_path)
                                     os.remove(wav_file)
                         flac_files = []
