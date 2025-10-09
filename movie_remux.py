@@ -125,7 +125,7 @@ class Chapter:
 
 
 
-def extract_lossless(mkv_file: str) -> tuple[int, dict[int, str]]:
+def extract_lossless(mkv_file: str, dolby_truehd_tracks: list[int]) -> tuple[int, dict[int, str]]:
     process = subprocess.Popen(f'mkvinfo "{mkv_file}" --ui-language en',
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                encoding='utf-8', errors='ignore')
@@ -140,7 +140,7 @@ def extract_lossless(mkv_file: str) -> tuple[int, dict[int, str]]:
             track_count = max(track_count, track_id)
         if line.startswith('|  + Codec ID: '):
             codec_id = line.removeprefix('|  + Codec ID: ').strip()
-            code_id_to_stream_type = {'A_DTS': 'DTS', 'A_PCM/INT/LIT': 'LPCM', 'A_PCM/INT/BIG': 'LPCM'}
+            code_id_to_stream_type = {'A_DTS': 'DTS', 'A_PCM/INT/LIT': 'LPCM', 'A_PCM/INT/BIG': 'LPCM', 'A_TRUEHD': 'TRUEHD', 'A_MLP': 'TRUEHD'}
             stream_type = code_id_to_stream_type.get(codec_id)
         if line.startswith('|  + Language (IETF BCP 47): '):
             bcp_47_code = line.removeprefix('|  + Language (IETF BCP 47): ').strip()
@@ -151,12 +151,15 @@ def extract_lossless(mkv_file: str) -> tuple[int, dict[int, str]]:
                 lang = getattr(language, "bibliographic", getattr(language, "alpha_3", None))
             else:
                 lang = 'und'
-            if stream_type in ('LPCM', 'DTS'):
-                track_info[track_id] = lang
-                if stream_type == 'LPCM':
-                    track_suffix_info[track_id] = 'wav'
-                else:
-                    track_suffix_info[track_id] = 'dts'
+            if stream_type in ('LPCM', 'DTS', 'TRUEHD'):
+                if track_id not in dolby_truehd_tracks:
+                    track_info[track_id] = lang
+                    if stream_type == 'LPCM':
+                        track_suffix_info[track_id] = 'wav'
+                    elif stream_type == 'DTS':
+                        track_suffix_info[track_id] = 'dts'
+                    else:
+                        track_suffix_info[track_id] = 'thd'
 
     if track_info:
         extract_info = []
@@ -407,8 +410,19 @@ for file in os.listdir(movie_folder):
 
                 remux_cmd = f'mkvmerge -o "{output_file}" {("-a " + ",".join(copy_audio_track)) if copy_audio_track else ""} {("-s " + ",".join(copy_sub_track)) if copy_sub_track else ""} {(" --attachment-name Cover.jpg" + " --attach-file " + "\"" + cover + "\"") if cover else "" } "{selected_mpls}"'
                 print(f'混流命令: {remux_cmd}')
-                subprocess.Popen(remux_cmd).wait()
-                track_count, track_info = extract_lossless(output_file)
+                #subprocess.Popen(remux_cmd).wait()
+                dolby_truehd_tracks = []
+                track_bits = {}
+                if os.path.exists(output_file):
+                    subprocess.Popen(f'ffprobe -v error -show_streams -show_format -of json "{output_file}" >info.json 2>&1', shell=True).wait()
+                    with open('info.json', 'r', encoding='utf-8') as fp:
+                        data = json.load(fp)
+                    for stream in data['streams']:
+                        if stream['codec_name'] == 'truehd' and stream.get('profile') == 'Dolby TrueHD + Dolby Atmos':
+                            dolby_truehd_tracks.append(stream['index'])
+                        if stream['codec_name'] in ('truehd', 'dts'):
+                            track_bits[stream['index']] = int(stream['bits_per_raw_sample'])
+                track_count, track_info = extract_lossless(output_file, dolby_truehd_tracks)
                 if track_info:
                     for file1 in os.listdir(dst_folder):
                         file1_path = os.path.join(dst_folder, file1)
@@ -419,11 +433,11 @@ for file in os.listdir(movie_folder):
                                 if len(os.listdir(dst_folder)) > n:
                                     os.remove(file1_path)
                             else:
+                                track_id = int(os.path.split(file1_path)[-1].split('.')[-2].removeprefix('track'))
+                                bits = track_bits.get(track_id, 24)
                                 wav_file = os.path.splitext(file1_path)[0] + '.wav'
                                 n = len(os.listdir(dst_folder))
-                                subprocess.Popen(f'ffmpeg -i "{file1_path}"  -c:a pcm_s24le -f w64 "{wav_file}"').wait()
-                                if len(os.listdir(dst_folder)) == n:
-                                    subprocess.Popen(f'ffmpeg -i "{file1_path}"  -c:a pcm_s16le -f w64 "{wav_file}"').wait()
+                                subprocess.Popen(f'ffmpeg -i "{file1_path}"  -c:a pcm_s{bits}le -f w64 "{wav_file}"').wait()
                                 subprocess.Popen(f'flac -8 -j {flac_threads} "{wav_file}"').wait()
                                 for file2 in os.listdir(dst_folder):
                                     if file2.endswith('.flac'):
@@ -485,7 +499,17 @@ for file in os.listdir(movie_folder):
                                              f'"{os.path.join(stream_folder, stream_file)}"').wait()
                 for sp in os.listdir(sps_folder):
                     mkv_file = os.path.join(sps_folder, sp)
-                    track_count, track_info = extract_lossless(mkv_file)
+                    dolby_truehd_tracks = []
+                    track_bits = {}
+                    subprocess.Popen(f'ffprobe -v error -show_streams -show_format -of json "{mkv_file}" >info.json 2>&1', shell=True).wait()
+                    with open('info.json', 'r', encoding='utf-8') as fp:
+                        data = json.load(fp)
+                    for stream in data['streams']:
+                        if stream['codec_name'] == 'truehd' and stream.get('profile') == 'Dolby TrueHD + Dolby Atmos':
+                            dolby_truehd_tracks.append(stream['index'])
+                        if stream['codec_name'] in ('truehd', 'dts'):
+                            track_bits[stream['index']] = int(stream['bits_per_raw_sample'])
+                    track_count, track_info = extract_lossless(mkv_file, dolby_truehd_tracks)
                     if track_info:
                         for file1 in os.listdir(sps_folder):
                             file1_path = os.path.join(sps_folder, file1)
@@ -496,13 +520,12 @@ for file in os.listdir(movie_folder):
                                     if len(os.listdir(sps_folder)) > n:
                                         os.remove(file1_path)
                                 else:
+                                    track_id = int(file1.split('.')[-2].removeprefix('track'))
+                                    bits = track_bits.get(track_id, 24)
                                     # ffmpeg直接转flac太慢，先将dts转成wav，再将wav转成flac
                                     wav_file = os.path.splitext(file1_path)[0] + '.wav'
                                     n = len(os.listdir(sps_folder))
-                                    subprocess.Popen(
-                                        f'ffmpeg -i "{file1_path}"  -c:a pcm_s24le -f w64 "{wav_file}"').wait()
-                                    if len(os.listdir(sps_folder)) == n:
-                                        subprocess.Popen(f'ffmpeg -i "{file1_path}"  -c:a pcm_s16le -f w64 "{wav_file}"').wait()
+                                    subprocess.Popen(f'ffmpeg -i "{file1_path}"  -c:a pcm_s{bits}le -f w64 "{wav_file}"').wait()
                                     subprocess.Popen(f'flac -8 -j {flac_threads} "{wav_file}"').wait()
                                     for file2 in os.listdir(dst_folder):
                                         if file2.endswith('.flac'):
