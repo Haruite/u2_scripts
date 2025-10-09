@@ -410,7 +410,7 @@ for file in os.listdir(movie_folder):
 
                 remux_cmd = f'mkvmerge -o "{output_file}" {("-a " + ",".join(copy_audio_track)) if copy_audio_track else ""} {("-s " + ",".join(copy_sub_track)) if copy_sub_track else ""} {(" --attachment-name Cover.jpg" + " --attach-file " + "\"" + cover + "\"") if cover else "" } "{selected_mpls}"'
                 print(f'混流命令: {remux_cmd}')
-                #subprocess.Popen(remux_cmd).wait()
+                subprocess.Popen(remux_cmd).wait()
                 dolby_truehd_tracks = []
                 track_bits = {}
                 if os.path.exists(output_file):
