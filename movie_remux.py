@@ -421,7 +421,7 @@ for file in os.listdir(movie_folder):
                         if stream['codec_name'] == 'truehd' and stream.get('profile') == 'Dolby TrueHD + Dolby Atmos':
                             dolby_truehd_tracks.append(stream['index'])
                         if stream['codec_name'] in ('truehd', 'dts'):
-                            track_bits[stream['index']] = int(stream['bits_per_raw_sample'])
+                            track_bits[stream['index']] = int(stream.get('bits_per_raw_sample') or 24)
                 track_count, track_info = extract_lossless(output_file, dolby_truehd_tracks)
                 if track_info:
                     for file1 in os.listdir(dst_folder):
@@ -508,7 +508,7 @@ for file in os.listdir(movie_folder):
                         if stream['codec_name'] == 'truehd' and stream.get('profile') == 'Dolby TrueHD + Dolby Atmos':
                             dolby_truehd_tracks.append(stream['index'])
                         if stream['codec_name'] in ('truehd', 'dts'):
-                            track_bits[stream['index']] = int(stream['bits_per_raw_sample'])
+                            track_bits[stream['index']] = int(stream.get('bits_per_raw_sample') or 24)
                     track_count, track_info = extract_lossless(mkv_file, dolby_truehd_tracks)
                     if track_info:
                         for file1 in os.listdir(sps_folder):
