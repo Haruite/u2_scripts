@@ -468,8 +468,11 @@ for file in os.listdir(movie_folder):
                         output_file1 = os.path.join(dst_folder, os.path.splitext(output_file)[0] + '(1).mkv')
                         remux_cmd = generate_remux_cmd(track_count, track_info, flac_files, output_file1, output_file)
                         subprocess.Popen(remux_cmd).wait()
-                        os.remove(output_file)
-                        os.rename(output_file1, output_file)
+                        if os.path.getsize(output_file1) > os.path.getsize(output_file):
+                            os.remove(output_file1)
+                        else:
+                            os.remove(output_file)
+                            os.rename(output_file1, output_file)
                         for flac_file in flac_files:
                             os.remove(flac_file)
 
@@ -556,7 +559,10 @@ for file in os.listdir(movie_folder):
                             remux_cmd = generate_remux_cmd(track_count, track_info, flac_files, output_file, mkv_file)
                             print(f'混流命令: {remux_cmd}')
                             subprocess.Popen(remux_cmd).wait()
-                            os.remove(mkv_file)
-                            os.rename(output_file, mkv_file)
+                            if os.path.getsize(output_file) > os.path.getsize(mkv_file):
+                                os.remove(output_file)
+                            else:
+                                os.remove(mkv_file)
+                                os.rename(output_file, mkv_file)
                             for flac_file in flac_files:
                                 os.remove(flac_file)
