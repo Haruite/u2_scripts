@@ -11,6 +11,7 @@ import json
 import os
 import re
 import subprocess
+import traceback
 import xml.etree.ElementTree as et
 from struct import unpack
 
@@ -165,7 +166,9 @@ def extract_lossless(mkv_file: str, dolby_truehd_tracks: list[int]) -> tuple[int
         extract_info = []
         for track_id, lang in track_info.items():
             extract_info.append(f'{track_id}:"{mkv_file.removesuffix(".mkv")}.track{track_id}.{track_suffix_info[track_id]}"')
-        subprocess.Popen(f'mkvextract "{mkv_file}" tracks {" ".join(extract_info)}').wait()
+        extract_cmd = f'mkvextract "{mkv_file}" tracks {" ".join(extract_info)}'
+        print(f'正在提取无损音轨，命令:{extract_cmd}')
+        subprocess.Popen(extract_cmd).wait()
 
     return track_count, track_info
 
@@ -276,298 +279,371 @@ class M2TS:
         return -1
 
 
-for file in os.listdir(movie_folder):
-    if os.path.isdir(os.path.join(movie_folder, file)):
-        for root, dirs, files in os.walk(os.path.join(movie_folder, file)):
-            if 'BDMV' in dirs and 'PLAYLIST' in os.listdir(os.path.join(root, 'BDMV')):
-                mpls_folder = os.path.join(root, 'BDMV', 'PLAYLIST')
-                max_indicator = 0
-                selected_mpls = ''
-                for filename in os.listdir(mpls_folder):
-                    if filename.endswith('.mpls'):
-                        mpls_file = os.path.join(mpls_folder, filename)
-                        chapter = Chapter(mpls_file)
-                        total_size = 0
-                        stream_files = set()
-                        for in_out_time in chapter.in_out_time:
-                            if in_out_time[0] not in stream_files:
-                                m2ts_file = os.path.join(root, 'BDMV', 'STREAM', f'{in_out_time[0]}.m2ts')
-                                if os.path.exists(m2ts_file):
-                                    total_size += os.path.getsize(os.path.join(root, 'BDMV', 'STREAM', f'{in_out_time[0]}.m2ts'))
-                                else:
-                                    print(f'error, {m2ts_file} is missing')
-                                # 计算播放列表文件总体积(重复文件只计算一次)
-                            stream_files.add(in_out_time[0])
-                        indicator = chapter.get_total_time_no_repeat() * (1 + sum(map(len, chapter.mark_info.values())) / 5) * os.path.getsize(mpls_file) * total_size
-                        # 有些播放列表轨道信息不全，所以这里乘了mpls的体积，选取mpls体积最大的
-                        if indicator >= max_indicator:
-                            max_indicator = indicator
-                            selected_mpls = mpls_file
-                sub_folder = root.removeprefix(os.path.join(movie_folder, file))
-                chapter = Chapter(selected_mpls)
-                chapter.get_pid_to_language()
-                m2ts_file = os.path.join(os.path.join(mpls_folder[:-9], 'STREAM'), Chapter(selected_mpls).in_out_time[0][0] + '.m2ts')
-                cmd = f'ffprobe -v error -show_streams -show_format -of json "{m2ts_file}" >info.json 2>&1'
-                subprocess.Popen(cmd, shell=True).wait()
-                with open('info.json', 'r', encoding='utf-8') as fp:
-                    data = json.load(fp)
-                audio_type_weight = {'': -1, 'aac': 1, 'ac3': 2, 'eac3': 3, 'lpcm': 4, 'dts': 5, 'dts_hd_ma': 6, 'truehd': 7}
-                selected_eng_audio_track = ['', '']
-                selected_zho_audio_track = ['', '']
-                copy_sub_track = []
-                for stream_info in data['streams']:
-                    if stream_info['codec_type'] == 'audio':
-                        codec_name = stream_info['codec_name']
-                        if codec_name == 'dts' and stream_info.get('profile') == 'DTS-HD MA':
-                            codec_name = 'dts_hd_ma'
-                        lang = chapter.pid_to_lang.get(int(stream_info['id'], 16), 'und')
-                        if lang == 'eng':
-                            if not selected_eng_audio_track[1] or audio_type_weight[codec_name] > audio_type_weight[
-                                selected_eng_audio_track[1]]:
-                                selected_eng_audio_track = [str(stream_info['index']), codec_name]
-                        elif lang == 'zho':
-                            if not selected_zho_audio_track[1] or audio_type_weight[codec_name] > audio_type_weight[
-                                selected_zho_audio_track[1]]:
-                                selected_zho_audio_track = [str(stream_info['index']), codec_name]
-                    elif stream_info['codec_type'] == 'subtitle':
-                        lang = chapter.pid_to_lang.get(int(stream_info['id'], 16), 'und')
-                        if lang in ['eng', 'zho']:
-                            copy_sub_track.append(str(stream_info['index']))
-                if not copy_sub_track:
-                    for stream_info in data['streams']:
-                        if stream_info['codec_type'] == 'subtitle':
-                            copy_sub_track.append(str(stream_info['index']))
-                            break
-                if not selected_zho_audio_track[0] and not selected_eng_audio_track[0]:
-                    copy_audio_track = []
-                    for stream_info in data['streams']:
-                        if stream_info['codec_type'] == 'audio':
-                            copy_audio_track.append(str(stream_info['index']))
-                            break
-                else:
-                    if selected_eng_audio_track[0] and selected_zho_audio_track[0]:
-                        copy_audio_track = [selected_eng_audio_track[0] , selected_zho_audio_track[0]]
-                    elif not selected_eng_audio_track[0]:
-                        copy_audio_track = [selected_zho_audio_track[0]]
+def remux_main_mpls(folder, file):
+    # 选择mpls
+    mpls_folder = os.path.join(folder, 'BDMV', 'PLAYLIST')
+    max_indicator = 0
+    selected_mpls = ''
+    file_total_size = 0
+    mark_num = 0
+    total_time = 0
+    for filename in os.listdir(mpls_folder):
+        if filename.endswith('.mpls'):
+            mpls_file = os.path.join(mpls_folder, filename)
+            chapter = Chapter(mpls_file)
+            total_size = 0
+            stream_files = set()
+            for in_out_time in chapter.in_out_time:
+                if in_out_time[0] not in stream_files:
+                    m2ts_file = os.path.join(folder, 'BDMV', 'STREAM', f'{in_out_time[0]}.m2ts')
+                    if os.path.exists(m2ts_file):
+                        total_size += os.path.getsize(os.path.join(folder, 'BDMV', 'STREAM', f'{in_out_time[0]}.m2ts'))
                     else:
-                        copy_audio_track = [selected_eng_audio_track[0]]
-                    first_audio_index = 1
-                    for stream_info in data['streams']:
-                        if stream_info['codec_type'] == 'audio':
-                            first_audio_index = stream_info['index']
-                            break
-                    if str(first_audio_index) not in (selected_zho_audio_track[0], selected_eng_audio_track[0]):
-                        copy_audio_track.append(str(first_audio_index))
+                        print(f'\033[31m错误,{filename}中的m2ts文件{m2ts_file}未找到\033[0m')
+                    # 计算播放列表文件总体积(重复文件只计算一次)
+                stream_files.add(in_out_time[0])
+            indicator = chapter.get_total_time_no_repeat() * (
+                    1 + sum(map(len, chapter.mark_info.values())) / 5) * os.path.getsize(mpls_file) * total_size
+            # 有些播放列表轨道信息不全，所以这里乘了mpls的体积，选取mpls体积最大的
+            if indicator >= max_indicator:
+                max_indicator = indicator
+                selected_mpls = mpls_file
+                file_total_size = total_size
+                mark_num = sum(map(len, chapter.mark_info.values()))
+                total_time = chapter.get_total_time()
+    print(f'{folder}: 选择mpls:{selected_mpls}作为remux主电影的mpls，文件大小{file_total_size / 1024 ** 3:.3f}GiB, 时长{total_time:.3f}s，章节数{mark_num}')
 
-                meta_folder = os.path.join(os.path.join(mpls_folder[:-9], 'META', 'DL'))
-                cover = ''
-                cover_size = 0
-                if not os.path.exists(meta_folder):
-                    output_name = os.path.split(mpls_folder[:-14])[-1]
+    sub_folder = folder.removeprefix(os.path.join(movie_folder, file))
+    chapter = Chapter(selected_mpls)
+    chapter.get_pid_to_language()
+    m2ts_file = os.path.join(os.path.join(mpls_folder[:-9], 'STREAM'),
+                             Chapter(selected_mpls).in_out_time[0][0] + '.m2ts')
+    print(f'正在分析mpls的第一个文件{m2ts_file}的轨道')
+    cmd = f'ffprobe -v error -show_streams -show_format -of json "{m2ts_file}" >info.json 2>&1'
+    subprocess.Popen(cmd, shell=True).wait()
+
+    with open('info.json', 'r', encoding='utf-8') as fp:
+        data = json.load(fp)
+    audio_type_weight = {'': -1, 'aac': 1, 'ac3': 2, 'eac3': 3, 'lpcm': 4, 'dts': 5, 'dts_hd_ma': 6, 'truehd': 7}
+    selected_eng_audio_track = ['', '']
+    selected_zho_audio_track = ['', '']
+    copy_sub_track = []
+    for stream_info in data['streams']:
+
+        if stream_info['codec_type'] == 'audio':
+            codec_name = stream_info['codec_name']
+            if codec_name == 'dts' and stream_info.get('profile') == 'DTS-HD MA':
+                codec_name = 'dts_hd_ma'
+            lang = chapter.pid_to_lang.get(int(stream_info['id'], 16), 'und')
+            if lang == 'eng':
+                if not selected_eng_audio_track[1] or audio_type_weight[codec_name] > audio_type_weight[
+                    selected_eng_audio_track[1]]:
+                    selected_eng_audio_track = [str(stream_info['index']), codec_name]
+            elif lang == 'zho':
+                if not selected_zho_audio_track[1] or audio_type_weight[codec_name] > audio_type_weight[
+                    selected_zho_audio_track[1]]:
+                    selected_zho_audio_track = [str(stream_info['index']), codec_name]
+        elif stream_info['codec_type'] == 'subtitle':
+            lang = chapter.pid_to_lang.get(int(stream_info['id'], 16), 'und')
+            if lang in ['eng', 'zho']:
+                copy_sub_track.append(str(stream_info['index']))
+    if not copy_sub_track:
+        for stream_info in data['streams']:
+            if stream_info['codec_type'] == 'subtitle':
+                copy_sub_track.append(str(stream_info['index']))
+                break
+    if not selected_zho_audio_track[0] and not selected_eng_audio_track[0]:
+        copy_audio_track = []
+        for stream_info in data['streams']:
+            if stream_info['codec_type'] == 'audio':
+                copy_audio_track.append(str(stream_info['index']))
+                break
+    else:
+        if selected_eng_audio_track[0] and selected_zho_audio_track[0]:
+            copy_audio_track = [selected_eng_audio_track[0], selected_zho_audio_track[0]]
+        elif not selected_eng_audio_track[0]:
+            copy_audio_track = [selected_zho_audio_track[0]]
+        else:
+            copy_audio_track = [selected_eng_audio_track[0]]
+        first_audio_index = 1
+        for stream_info in data['streams']:
+            if stream_info['codec_type'] == 'audio':
+                first_audio_index = stream_info['index']
+                break
+        if str(first_audio_index) not in (selected_zho_audio_track[0], selected_eng_audio_track[0]):
+            copy_audio_track.append(str(first_audio_index))
+    print(f'选择音频轨道{copy_audio_track}，字幕轨道{copy_sub_track}')
+    meta_folder = os.path.join(os.path.join(mpls_folder[:-9], 'META', 'DL'))
+    cover = ''
+    cover_size = 0
+    if not os.path.exists(meta_folder):
+        output_name = os.path.split(mpls_folder[:-14])[-1]
+    else:
+        for filename in os.listdir(meta_folder):
+            # 获取附件Cover
+            if filename.endswith('.jpg') or filename.endswith('.JPG') or filename.endswith(
+                    '.JPEG') or filename.endswith('.jpeg') or filename.endswith('.png') or filename.endswith('.PNG'):
+                if os.path.getsize(os.path.join(meta_folder, filename)) > cover_size:
+                    cover = os.path.join(meta_folder, filename)
+                    cover_size = os.path.getsize(os.path.join(meta_folder, filename))
+        # 获取输出文件名
+        output_name = ''
+        for filename in os.listdir(meta_folder):
+            if filename == 'bdmt_eng.xml':
+                tree = et.parse(os.path.join(meta_folder, filename))
+                folder = tree.getroot()
+                ns = {'di': 'urn:BDA:bdmv;discinfo'}
+                output_name = folder.find('.//di:name', ns).text
+                break
+        if not output_name:
+            for filename in os.listdir(meta_folder):
+                if filename == 'bdmt_zho.xml':
+                    tree = et.parse(os.path.join(meta_folder, filename))
+                    folder = tree.getroot()
+                    ns = {'di': 'urn:BDA:bdmv;discinfo'}
+                    output_name = folder.find('.//di:name', ns).text
+                    break
+        if not output_name:
+            for filename in os.listdir(meta_folder):
+                tree = et.parse(os.path.join(meta_folder, filename))
+                folder = tree.getroot()
+                ns = {'di': 'urn:BDA:bdmv;discinfo'}
+                output_name = folder.find('.//di:name', ns).text
+                break
+        if not output_name:
+            output_name = os.path.split(mpls_folder[:-14])[-1]
+    char_map = {
+        '?': '？',
+        '*': '★',
+        '<': '《',
+        '>': '》',
+        ':': '：',
+        '"': "'",
+        '/': '／',
+        '\\': '／',
+        '|': '￨'
+    }
+    output_name = ''.join(char_map.get(char) or char for char in output_name)
+
+    dst_folder = os.path.join(output_folder, os.path.split(mpls_folder[:-14])[-1])
+    if sub_folder:
+        dst_folder = os.path.join(dst_folder, sub_folder)
+    if cover:
+        print(f"找到封面图片{cover}")
+    print(f'输出文件名{output_name}.mkv')
+    output_file = os.path.join(dst_folder, output_name) + '.mkv'
+
+    remux_cmd = f'mkvmerge -o "{output_file}" {("-a " + ",".join(copy_audio_track)) if copy_audio_track else ""} {("-s " + ",".join(copy_sub_track)) if copy_sub_track else ""} {(" --attachment-name Cover.jpg" + " --attach-file " + "\"" + cover + "\"") if cover else ""} "{selected_mpls}"'
+    print(f'混流命令: {remux_cmd}')
+    subprocess.Popen(remux_cmd).wait()
+    return selected_mpls, dst_folder, output_file
+
+def flac_task(output_file, dst_folder):
+    dolby_truehd_tracks = []
+    track_bits = {}
+    if os.path.exists(output_file):
+        subprocess.Popen(f'ffprobe -v error -show_streams -show_format -of json "{output_file}" >info.json 2>&1',
+                         shell=True).wait()
+        with open('info.json', 'r', encoding='utf-8') as fp:
+            data = json.load(fp)
+        for stream in data['streams']:
+            if stream['codec_name'] == 'truehd' and stream.get('profile') == 'Dolby TrueHD + Dolby Atmos':
+                dolby_truehd_tracks.append(stream['index'])
+            if stream['codec_name'] in ('truehd', 'dts'):
+                track_bits[stream['index']] = int(stream.get('bits_per_raw_sample') or 24)
+    else:
+        print('\033[31m错误，电影混流失败，请检查任务输出\033[0m')
+    track_count, track_info = extract_lossless(output_file, dolby_truehd_tracks)
+    if track_info:
+        for file1 in os.listdir(dst_folder):
+            file1_path = os.path.join(dst_folder, file1)
+            if file1_path != output_file:
+                print(f'正在压缩音轨{file1_path}')
+                if file1_path.endswith('.wav'):
+                    n = len(os.listdir(dst_folder))
+                    flac_file = os.path.splitext(file1_path)[0] + '.flac'
+                    subprocess.Popen(f'"{flac_path}" -8 -j {flac_threads} "{file1_path} -o {flac_file}"').wait()
+                    if len(os.listdir(dst_folder)) > n:
+                        os.remove(file1_path)
+                        delta = os.path.getsize(file1_path) - os.path.getsize(flac_file)
+                        print(f'将音轨{file1_path}压缩成flac，减小体积{delta / 1024 ** 2:.3f}MiB')
                 else:
-                    for filename in os.listdir(meta_folder):
-                        # 获取附件Cover
-                        if filename.endswith('.jpg') or filename.endswith('.JPG') or filename.endswith('.JPEG') or filename.endswith('.jpeg') or filename.endswith('.png') or filename.endswith('.PNG'):
-                            if os.path.getsize(os.path.join(meta_folder, filename)) > cover_size:
-                                cover = os.path.join(meta_folder, filename)
-                                cover_size = os.path.getsize(os.path.join(meta_folder, filename))
-                    # 获取输出文件名
-                    output_name = ''
-                    for filename in os.listdir(meta_folder):
-                        if filename == 'bdmt_eng.xml':
-                            tree = et.parse(os.path.join(meta_folder, filename))
-                            root = tree.getroot()
-                            ns = {'di': 'urn:BDA:bdmv;discinfo'}
-                            output_name = root.find('.//di:name', ns).text
-                            break
-                    if not output_name:
-                        for filename in os.listdir(meta_folder):
-                            if filename == 'bdmt_zho.xml':
-                                tree = et.parse(os.path.join(meta_folder, filename))
-                                root = tree.getroot()
-                                ns = {'di': 'urn:BDA:bdmv;discinfo'}
-                                output_name = root.find('.//di:name', ns).text
-                                break
-                    if not output_name:
-                        for filename in os.listdir(meta_folder):
-                            tree = et.parse(os.path.join(meta_folder, filename))
-                            root = tree.getroot()
-                            ns = {'di': 'urn:BDA:bdmv;discinfo'}
-                            output_name = root.find('.//di:name', ns).text
-                            break
-                    if not output_name:
-                        output_name = os.path.split(mpls_folder[:-14])[-1]
-                char_map = {
-                    '?': '？',
-                    '*': '★',
-                    '<': '《',
-                    '>': '》',
-                    ':': '：',
-                    '"': "'",
-                    '/': '／',
-                    '\\': '／',
-                    '|': '￨'
-                }
-                output_name = ''.join(char_map.get(char) or char for char in output_name)
+                    track_id = int(os.path.split(file1_path)[-1].split('.')[-2].removeprefix('track'))
+                    bits = track_bits.get(track_id, 24)
+                    wav_file = os.path.splitext(file1_path)[0] + '.wav'
+                    subprocess.Popen(f'ffmpeg -i "{file1_path}"  -c:a pcm_s{bits}le -f w64 "{wav_file}"').wait()
+                    flac_file = os.path.splitext(file1_path)[0] + '.flac'
+                    subprocess.Popen(f'{flac_path} -8 -j {flac_threads} "{wav_file}" -o "{flac_file}"').wait()
+                    if os.path.exists(flac_file):
+                        if os.path.getsize(flac_file) > os.path.getsize(file1_path):
+                            print(f'flac文件比原音轨大，将删除{flac_file}')
+                            os.remove(flac_file)
+                        else:
+                            delta = os.path.getsize(file1_path) - os.path.getsize(flac_file)
+                            print(f'将音轨{file1_path}压缩成flac，减小体积{delta / 1024 ** 2:.3f}MiB')
+                    else:
+                        print('\033[31m错误，flac压缩失败，请检查任务输出\033[0m')
+                    os.remove(file1_path)
+                    os.remove(wav_file)
+        flac_files = []
+        for file1 in os.listdir(dst_folder):
+            file1_path = os.path.join(dst_folder, file1)
+            if file1_path.endswith('.flac'):
+                flac_files.append(file1_path)
+        if not flac_files:
+            for file1 in os.listdir(dst_folder):
+                file1_path = os.path.join(dst_folder, file1)
+                if file1_path != output_file:
+                    if file1_path.endswith('.wav'):
+                        n = len(os.listdir(dst_folder))
+                        print(f'flac压缩wav文件{file1_path}失败，将使用ffmpeg压缩')
+                        subprocess.Popen(
+                            f'ffmpeg -i "{file1_path}" -c:a flac "{file1_path.removesuffix(".wav") + ".flac"}"').wait()
+                        if len(os.listdir(dst_folder)) > n:
+                            os.remove(file1_path)
+            for file1 in os.listdir(dst_folder):
+                file1_path = os.path.join(dst_folder, file1)
+                if file1_path.endswith('.flac'):
+                    flac_files.append(file1_path)
+        if flac_files:
+            output_file1 = os.path.join(dst_folder, os.path.splitext(output_file)[0] + '(1).mkv')
+            remux_cmd = generate_remux_cmd(track_count, track_info, flac_files, output_file1, output_file)
+            print(f'混流命令：{remux_cmd}')
+            subprocess.Popen(remux_cmd).wait()
+            if os.path.getsize(output_file1) > os.path.getsize(output_file):
+                os.remove(output_file1)
+            else:
+                os.remove(output_file)
+                os.rename(output_file1, output_file)
+            for flac_file in flac_files:
+                os.remove(flac_file)
 
-                dst_folder = os.path.join(output_folder, os.path.split(mpls_folder[:-14])[-1])
-                if sub_folder:
-                    dst_folder = os.path.join(dst_folder, sub_folder)
-                output_file = os.path.join(dst_folder, output_name) + '.mkv'
 
-                remux_cmd = f'mkvmerge -o "{output_file}" {("-a " + ",".join(copy_audio_track)) if copy_audio_track else ""} {("-s " + ",".join(copy_sub_track)) if copy_sub_track else ""} {(" --attachment-name Cover.jpg" + " --attach-file " + "\"" + cover + "\"") if cover else "" } "{selected_mpls}"'
+def remux_sps(dst_folder, selected_mpls):
+    sps_folder = os.path.join(dst_folder, 'SPs')
+    os.makedirs(sps_folder, exist_ok=True)
+    index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(Chapter(selected_mpls))
+    parsed_m2ts_files = set(index_to_m2ts.values())
+    sp_index = 0
+    mpls_folder = os.path.dirname(selected_mpls)
+    print('正在扫描原盘中的其他mpls...')
+    for mpls_file in os.listdir(os.path.dirname(mpls_folder)):
+        if not mpls_file.endswith('.mpls'):
+            continue
+        mpls_file_path = os.path.join(os.path.dirname(mpls_folder), mpls_file)
+        if mpls_file_path != mpls_folder:
+            index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(Chapter(mpls_file_path))
+            if not (parsed_m2ts_files & set(index_to_m2ts.values())):
+                if len(index_to_m2ts) > 1:
+                    sp_index += 1
+                    print(f'找到特典文件对应的mpls{mpls_file},并将其混流')
+                    subprocess.Popen(f'mkvmerge -o "{sps_folder}{os.sep}'
+                                     f'SP{sp_index}.mkv" "{mpls_file_path}"').wait()
+                    parsed_m2ts_files |= set(index_to_m2ts.values())
+    stream_folder = os.path.join(os.path.dirname(mpls_folder).removesuffix('PLAYLIST'), 'STREAM')
+    for stream_file in os.listdir(stream_folder):
+        if stream_file not in parsed_m2ts_files and stream_file.endswith('.m2ts'):
+            if M2TS(os.path.join(stream_folder, stream_file)).get_duration() > 30 * 90000:
+                print(f'找到特典文件{stream_file},并将其混流')
+                subprocess.Popen(f'mkvmerge -o "{sps_folder}{os.sep}'
+                                 f'{stream_file[:-5]}.mkv" '
+                                 f'"{os.path.join(stream_folder, stream_file)}"').wait()
+    for sp in os.listdir(sps_folder):
+        mkv_file = os.path.join(sps_folder, sp)
+        dolby_truehd_tracks = []
+        track_bits = {}
+        subprocess.Popen(f'ffprobe -v error -show_streams -show_format -of json "{mkv_file}" >info.json 2>&1',
+                         shell=True).wait()
+        with open('info.json', 'r', encoding='utf-8') as fp:
+            data = json.load(fp)
+        for stream in data['streams']:
+            if stream['codec_name'] == 'truehd' and stream.get('profile') == 'Dolby TrueHD + Dolby Atmos':
+                dolby_truehd_tracks.append(stream['index'])
+            if stream['codec_name'] in ('truehd', 'dts'):
+                track_bits[stream['index']] = int(stream.get('bits_per_raw_sample') or 24)
+        track_count, track_info = extract_lossless(mkv_file, dolby_truehd_tracks)
+        if track_info:
+            for file1 in os.listdir(sps_folder):
+                file1_path = os.path.join(sps_folder, file1)
+                if file1_path != mkv_file and file1_path.startswith(mkv_file.removesuffix('.mkv')):
+                    if file1_path.endswith('.wav'):
+                        n = len(os.listdir(sps_folder))
+                        subprocess.Popen(f'"{flac_path}" -8 -j {flac_threads} "{file1_path}"').wait()
+                        if len(os.listdir(sps_folder)) > n:
+                            os.remove(file1_path)
+                    else:
+                        track_id = int(file1.split('.')[-2].removeprefix('track'))
+                        bits = track_bits.get(track_id, 24)
+                        # ffmpeg直接转flac太慢，先将dts转成wav，再将wav转成flac
+                        wav_file = os.path.splitext(file1_path)[0] + '.wav'
+                        n = len(os.listdir(sps_folder))
+                        subprocess.Popen(f'ffmpeg -i "{file1_path}"  -c:a pcm_s{bits}le -f w64 "{wav_file}"').wait()
+                        flac_file = os.path.splitext(file1_path)[0] + '.flac'
+                        subprocess.Popen(f'flac -8 -j {flac_threads} "{wav_file}" -o "{flac_file}"').wait()
+                        if os.path.exists(flac_file):
+                            if os.path.getsize(flac_file) > os.path.getsize(file1_path):
+                                # 如果转换出来的flac体积比dts体积大则舍弃，这种情况很常见
+                                os.remove(flac_file)
+                        os.remove(file1_path)
+                        os.remove(wav_file)
+            flac_files = []
+            for file1 in os.listdir(sps_folder):
+                if file1.endswith('.flac'):
+                    flac_files.append(os.path.join(sps_folder, file1))
+            if not flac_files:
+                for file1 in os.listdir(sps_folder):
+                    file1_path = os.path.join(sps_folder, file1)
+                    if file1_path != mkv_file and file1_path.startswith(mkv_file.removesuffix('.mkv')):
+                        if file1_path.endswith('.wav'):
+                            n = len(os.listdir(sps_folder))
+                            subprocess.Popen(
+                                f'ffmpeg -i "{file1_path}" -c:a flac "{file1_path.removesuffix(".wav") + ".flac"}"').wait()
+                            if len(os.listdir(sps_folder)) > n:
+                                os.remove(file1_path)
+                for file1 in os.listdir(sps_folder):
+                    if file1.endswith('.flac'):
+                        flac_files.append(os.path.join(sps_folder, file1))
+            if flac_files:
+                output_file = os.path.join(sps_folder, os.path.splitext(sp)[0] + '(1).mkv')
+                remux_cmd = generate_remux_cmd(track_count, track_info, flac_files, output_file, mkv_file)
                 print(f'混流命令: {remux_cmd}')
                 subprocess.Popen(remux_cmd).wait()
-                dolby_truehd_tracks = []
-                track_bits = {}
-                if os.path.exists(output_file):
-                    subprocess.Popen(f'ffprobe -v error -show_streams -show_format -of json "{output_file}" >info.json 2>&1', shell=True).wait()
-                    with open('info.json', 'r', encoding='utf-8') as fp:
-                        data = json.load(fp)
-                    for stream in data['streams']:
-                        if stream['codec_name'] == 'truehd' and stream.get('profile') == 'Dolby TrueHD + Dolby Atmos':
-                            dolby_truehd_tracks.append(stream['index'])
-                        if stream['codec_name'] in ('truehd', 'dts'):
-                            track_bits[stream['index']] = int(stream.get('bits_per_raw_sample') or 24)
-                track_count, track_info = extract_lossless(output_file, dolby_truehd_tracks)
-                if track_info:
-                    for file1 in os.listdir(dst_folder):
-                        file1_path = os.path.join(dst_folder, file1)
-                        if file1_path != output_file:
-                            if file1_path.endswith('.wav'):
-                                n = len(os.listdir(dst_folder))
-                                subprocess.Popen(f'"{flac_path}" -8 -j {flac_threads} "{file1_path}"').wait()
-                                if len(os.listdir(dst_folder)) > n:
-                                    os.remove(file1_path)
-                            else:
-                                track_id = int(os.path.split(file1_path)[-1].split('.')[-2].removeprefix('track'))
-                                bits = track_bits.get(track_id, 24)
-                                wav_file = os.path.splitext(file1_path)[0] + '.wav'
-                                n = len(os.listdir(dst_folder))
-                                subprocess.Popen(f'ffmpeg -i "{file1_path}"  -c:a pcm_s{bits}le -f w64 "{wav_file}"').wait()
-                                flac_file = os.path.splitext(file1_path)[0] + '.flac'
-                                subprocess.Popen(f'flac -8 -j {flac_threads} "{wav_file}" -o "{flac_file}"').wait()
-                                if os.path.exists(flac_file):
-                                    if os.path.getsize(flac_file) > os.path.getsize(file1_path):
-                                        os.remove(flac_file)
-                                os.remove(file1_path)
-                                os.remove(wav_file)
-                    flac_files = []
-                    for file1 in os.listdir(dst_folder):
-                        file1_path = os.path.join(dst_folder, file1)
-                        if file1_path.endswith('.flac'):
-                            flac_files.append(file1_path)
-                    if not flac_files:
-                        for file1 in os.listdir(dst_folder):
-                            file1_path = os.path.join(dst_folder, file1)
-                            if file1_path != output_file:
-                                if file1_path.endswith('.wav'):
-                                    n = len(os.listdir(dst_folder))
-                                    subprocess.Popen(f'ffmpeg -i "{file1_path}" -c:a flac "{file1_path.removesuffix(".wav") + ".flac"}"').wait()
-                                    if len(os.listdir(dst_folder)) > n:
-                                        os.remove(file1_path)
-                        for file1 in os.listdir(dst_folder):
-                            file1_path = os.path.join(dst_folder, file1)
-                            if file1_path.endswith('.flac'):
-                                flac_files.append(file1_path)
-                    if flac_files:
-                        output_file1 = os.path.join(dst_folder, os.path.splitext(output_file)[0] + '(1).mkv')
-                        remux_cmd = generate_remux_cmd(track_count, track_info, flac_files, output_file1, output_file)
-                        subprocess.Popen(remux_cmd).wait()
-                        if os.path.getsize(output_file1) > os.path.getsize(output_file):
-                            os.remove(output_file1)
-                        else:
-                            os.remove(output_file)
-                            os.rename(output_file1, output_file)
-                        for flac_file in flac_files:
-                            os.remove(flac_file)
+                if os.path.getsize(output_file) > os.path.getsize(mkv_file):
+                    os.remove(output_file)
+                else:
+                    os.remove(mkv_file)
+                    os.rename(output_file, mkv_file)
+                for flac_file in flac_files:
+                    os.remove(flac_file)
 
-                sps_folder = os.path.join(dst_folder, 'SPs')
-                os.makedirs(sps_folder, exist_ok=True)
-                index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(Chapter(selected_mpls))
-                parsed_m2ts_files = set(index_to_m2ts.values())
-                sp_index = 0
-                for mpls_file in os.listdir(os.path.dirname(mpls_folder)):
-                    if not mpls_file.endswith('.mpls'):
-                        continue
-                    mpls_file_path = os.path.join(os.path.dirname(mpls_folder), mpls_file)
-                    if mpls_file_path != mpls_folder:
-                        index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(Chapter(mpls_file_path))
-                        if not (parsed_m2ts_files & set(index_to_m2ts.values())):
-                            if len(index_to_m2ts) > 1:
-                                sp_index += 1
-                                subprocess.Popen(f'mkvmerge -o "{sps_folder}{os.sep}'
-                                                 f'SP{sp_index}.mkv" "{mpls_file_path}"').wait()
-                                parsed_m2ts_files |= set(index_to_m2ts.values())
-                stream_folder = os.path.join(os.path.dirname(mpls_folder).removesuffix('PLAYLIST'), 'STREAM')
-                for stream_file in os.listdir(stream_folder):
-                    if stream_file not in parsed_m2ts_files and stream_file.endswith('.m2ts'):
-                        if M2TS(os.path.join(stream_folder, stream_file)).get_duration() > 30 * 90000:
-                            subprocess.Popen(f'mkvmerge -o "{sps_folder}{os.sep}'
-                                             f'{stream_file[:-5]}.mkv" '
-                                             f'"{os.path.join(stream_folder, stream_file)}"').wait()
-                for sp in os.listdir(sps_folder):
-                    mkv_file = os.path.join(sps_folder, sp)
-                    dolby_truehd_tracks = []
-                    track_bits = {}
-                    subprocess.Popen(f'ffprobe -v error -show_streams -show_format -of json "{mkv_file}" >info.json 2>&1', shell=True).wait()
-                    with open('info.json', 'r', encoding='utf-8') as fp:
-                        data = json.load(fp)
-                    for stream in data['streams']:
-                        if stream['codec_name'] == 'truehd' and stream.get('profile') == 'Dolby TrueHD + Dolby Atmos':
-                            dolby_truehd_tracks.append(stream['index'])
-                        if stream['codec_name'] in ('truehd', 'dts'):
-                            track_bits[stream['index']] = int(stream.get('bits_per_raw_sample') or 24)
-                    track_count, track_info = extract_lossless(mkv_file, dolby_truehd_tracks)
-                    if track_info:
-                        for file1 in os.listdir(sps_folder):
-                            file1_path = os.path.join(sps_folder, file1)
-                            if file1_path != mkv_file and file1_path.startswith(mkv_file.removesuffix('.mkv')):
-                                if file1_path.endswith('.wav'):
-                                    n = len(os.listdir(sps_folder))
-                                    subprocess.Popen(f'"{flac_path}" -8 -j {flac_threads} "{file1_path}"').wait()
-                                    if len(os.listdir(sps_folder)) > n:
-                                        os.remove(file1_path)
-                                else:
-                                    track_id = int(file1.split('.')[-2].removeprefix('track'))
-                                    bits = track_bits.get(track_id, 24)
-                                    # ffmpeg直接转flac太慢，先将dts转成wav，再将wav转成flac
-                                    wav_file = os.path.splitext(file1_path)[0] + '.wav'
-                                    n = len(os.listdir(sps_folder))
-                                    subprocess.Popen(f'ffmpeg -i "{file1_path}"  -c:a pcm_s{bits}le -f w64 "{wav_file}"').wait()
-                                    flac_file = os.path.splitext(file1_path)[0] + '.flac'
-                                    subprocess.Popen(f'flac -8 -j {flac_threads} "{wav_file}" -o "{flac_file}"').wait()
-                                    if os.path.exists(flac_file):
-                                        if os.path.getsize(flac_file) > os.path.getsize(file1_path):
-                                            # 如果转换出来的flac体积比dts体积大则舍弃，这种情况很常见
-                                            os.remove(flac_file)
-                                    os.remove(file1_path)
-                                    os.remove(wav_file)
-                        flac_files = []
-                        for file1 in os.listdir(sps_folder):
-                            if file1.endswith('.flac'):
-                                flac_files.append(os.path.join(sps_folder, file1))
-                        if not flac_files:
-                            for file1 in os.listdir(sps_folder):
-                                file1_path = os.path.join(sps_folder, file1)
-                                if file1_path != mkv_file and file1_path.startswith(mkv_file.removesuffix('.mkv')):
-                                    if file1_path.endswith('.wav'):
-                                        n = len(os.listdir(sps_folder))
-                                        subprocess.Popen(f'ffmpeg -i "{file1_path}" -c:a flac "{file1_path.removesuffix(".wav") + ".flac"}"').wait()
-                                        if len(os.listdir(sps_folder)) > n:
-                                            os.remove(file1_path)
-                            for file1 in os.listdir(sps_folder):
-                                if file1.endswith('.flac'):
-                                    flac_files.append(os.path.join(sps_folder, file1))
-                        if flac_files:
-                            output_file = os.path.join(sps_folder, os.path.splitext(sp)[0] + '(1).mkv')
-                            remux_cmd = generate_remux_cmd(track_count, track_info, flac_files, output_file, mkv_file)
-                            print(f'混流命令: {remux_cmd}')
-                            subprocess.Popen(remux_cmd).wait()
-                            if os.path.getsize(output_file) > os.path.getsize(mkv_file):
-                                os.remove(output_file)
-                            else:
-                                os.remove(mkv_file)
-                                os.rename(output_file, mkv_file)
-                            for flac_file in flac_files:
-                                os.remove(flac_file)
+
+def get_folder_size(folder):
+    byte = 0
+    for root, dirs, files in os.walk(folder):
+        for file in files:
+            byte += os.path.getsize(os.path.join(root, file))
+    return byte
+
+
+def remux_movie_folder(folder, file):
+    selected_mpls, dst_folder, output_file = remux_main_mpls(folder, file)
+    flac_task(output_file, dst_folder)
+    remux_sps(dst_folder, selected_mpls)
+    bd_size = round(get_folder_size(folder) / 1024 ** 3, 3)
+    remux_size = round(get_folder_size(dst_folder) / 1024 ** 3, 3)
+    print(f'混流原盘{folder}已完成，原盘大小{bd_size}GiB，remux大小{remux_size}GiB，减小体积{bd_size - remux_size}GiB')
+
+
+def main():
+    for file in os.listdir(movie_folder):
+        if os.path.isdir(os.path.join(movie_folder, file)):
+            for root, dirs, files in os.walk(os.path.join(movie_folder, file)):
+                if 'BDMV' in dirs and 'PLAYLIST' in os.listdir(os.path.join(root, 'BDMV')):
+                    try:
+                        remux_movie_folder(root, file)
+                    except Exception:
+                        traceback.print_exc()
+
+
+if __name__ == '__main__':
+    main()
