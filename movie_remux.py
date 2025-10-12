@@ -291,7 +291,11 @@ for file in os.listdir(movie_folder):
                         stream_files = set()
                         for in_out_time in chapter.in_out_time:
                             if in_out_time[0] not in stream_files:
-                                total_size += os.path.getsize(os.path.join(root, 'BDMV', 'STREAM', f'{in_out_time[0]}.m2ts'))
+                                m2ts_file = os.path.join(root, 'BDMV', 'STREAM', f'{in_out_time[0]}.m2ts')
+                                if os.path.exists(m2ts_file):
+                                    total_size += os.path.getsize(os.path.join(root, 'BDMV', 'STREAM', f'{in_out_time[0]}.m2ts'))
+                                else:
+                                    print(f'error, {m2ts_file} is missing')
                                 # 计算播放列表文件总体积(重复文件只计算一次)
                             stream_files.add(in_out_time[0])
                         indicator = chapter.get_total_time_no_repeat() * (1 + sum(map(len, chapter.mark_info.values())) / 5) * os.path.getsize(mpls_file) * total_size
