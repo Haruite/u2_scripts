@@ -279,7 +279,7 @@ class M2TS:
         return -1
 
 
-def remux_main_mpls(folder, file):
+def remux_main_mpls(folder):
     # 选择mpls
     mpls_folder = os.path.join(folder, 'BDMV', 'PLAYLIST')
     max_indicator = 0
@@ -313,7 +313,6 @@ def remux_main_mpls(folder, file):
                 total_time = chapter.get_total_time()
     print(f'{folder}: 选择mpls:{selected_mpls}作为remux主电影的mpls，文件大小{file_total_size / 1024 ** 3:.3f}GiB, 时长{total_time:.3f}s，章节数{mark_num}')
 
-    sub_folder = folder.removeprefix(os.path.join(movie_folder, file))
     chapter = Chapter(selected_mpls)
     chapter.get_pid_to_language()
     m2ts_file = os.path.join(os.path.join(mpls_folder[:-9], 'STREAM'),
@@ -391,24 +390,24 @@ def remux_main_mpls(folder, file):
         for filename in os.listdir(meta_folder):
             if filename == 'bdmt_eng.xml':
                 tree = et.parse(os.path.join(meta_folder, filename))
-                folder = tree.getroot()
+                _folder = tree.getroot()
                 ns = {'di': 'urn:BDA:bdmv;discinfo'}
-                output_name = folder.find('.//di:name', ns).text
+                output_name = _folder.find('.//di:name', ns).text
                 break
         if not output_name:
             for filename in os.listdir(meta_folder):
                 if filename == 'bdmt_zho.xml':
                     tree = et.parse(os.path.join(meta_folder, filename))
-                    folder = tree.getroot()
+                    _folder = tree.getroot()
                     ns = {'di': 'urn:BDA:bdmv;discinfo'}
-                    output_name = folder.find('.//di:name', ns).text
+                    output_name = _folder.find('.//di:name', ns).text
                     break
         if not output_name:
             for filename in os.listdir(meta_folder):
                 tree = et.parse(os.path.join(meta_folder, filename))
-                folder = tree.getroot()
+                _folder = tree.getroot()
                 ns = {'di': 'urn:BDA:bdmv;discinfo'}
-                output_name = folder.find('.//di:name', ns).text
+                output_name = _folder.find('.//di:name', ns).text
                 break
         if not output_name:
             output_name = os.path.split(mpls_folder[:-14])[-1]
@@ -424,10 +423,7 @@ def remux_main_mpls(folder, file):
         '|': '￨'
     }
     output_name = ''.join(char_map.get(char) or char for char in output_name)
-
-    dst_folder = os.path.join(output_folder, os.path.split(mpls_folder[:-14])[-1])
-    if sub_folder:
-        dst_folder = os.path.join(dst_folder, sub_folder)
+    dst_folder = output_folder + folder.removeprefix(movie_folder)
     if cover:
         print(f"找到封面图片{cover}")
     print(f'输出文件名{output_name}.mkv')
@@ -625,13 +621,13 @@ def get_folder_size(folder):
     return byte
 
 
-def remux_movie_folder(folder, file):
-    selected_mpls, dst_folder, output_file = remux_main_mpls(folder, file)
+def remux_movie_folder(folder):
+    selected_mpls, dst_folder, output_file = remux_main_mpls(folder)
     flac_task(output_file, dst_folder)
     remux_sps(dst_folder, selected_mpls)
     bd_size = round(get_folder_size(folder) / 1024 ** 3, 3)
     remux_size = round(get_folder_size(dst_folder) / 1024 ** 3, 3)
-    print(f'混流原盘{folder}已完成，原盘大小{bd_size}GiB，remux大小{remux_size}GiB，减小体积{bd_size - remux_size}GiB')
+    print(f'混流原盘{folder}已完成，原盘大小{bd_size}GiB，remux大小{remux_size}GiB，减小体积{bd_size - remux_size:.3f}GiB')
 
 
 def main():
@@ -640,7 +636,7 @@ def main():
             for root, dirs, files in os.walk(os.path.join(movie_folder, file)):
                 if 'BDMV' in dirs and 'PLAYLIST' in os.listdir(os.path.join(root, 'BDMV')):
                     try:
-                        remux_movie_folder(root, file)
+                        remux_movie_folder(root)
                     except Exception:
                         traceback.print_exc()
 
