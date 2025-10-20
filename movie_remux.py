@@ -90,7 +90,7 @@ class Chapter:
                     nb_of_angles = self._unpack_byte(1)
                     self.mpls_file.read(1)
                     for _ in range(nb_of_angles - 1):
-                        self.mpls_file.read(9)
+                        self.mpls_file.read(10)
                 self.mpls_file.read(4)
                 nb = []
                 for _ in range(8):
@@ -572,7 +572,6 @@ def remux_sps(dst_folder, selected_mpls):
                         bits = track_bits.get(track_id, 24)
                         # ffmpeg直接转flac太慢，先将dts转成wav，再将wav转成flac
                         wav_file = os.path.splitext(file1_path)[0] + '.wav'
-                        n = len(os.listdir(sps_folder))
                         subprocess.Popen(f'ffmpeg -i "{file1_path}"  -c:a pcm_s{bits}le -f w64 "{wav_file}"').wait()
                         flac_file = os.path.splitext(file1_path)[0] + '.flac'
                         subprocess.Popen(f'flac -8 -j {flac_threads} "{wav_file}" -o "{flac_file}"').wait()
