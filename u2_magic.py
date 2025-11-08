@@ -80,7 +80,7 @@ clients_info = ({'type': 'deluge',  # 'de', 'Deluge', 'deluge'
                 {'type': 'qbittorrent',  # 'qb', 'QB', 'qbittorrent', 'qBittorrent'
                  'host': 'http://127.0.0.1',  # 主机，最好加上 http
                  'port': 8080,  # webui 端口
-                 'username': '',  # web 用户名
+                 'username': '',  # web 用户名，注意如果勾选对本地主机跳过验证，这里一定留空，否则会有bug
                  'password': '',  # web 密码
                  'connect_interval': 1,  # 从客户端读取种子状态的时间间隔
                  'min_announce_interval': 300  # 默认值 300
@@ -2016,6 +2016,9 @@ async def run_job(self: Run):
         if use_client:
             while True:
                 sleep(1)
+                for instance in self.instances[1:]:
+                    if not instance.client.username:  # 客户端勾选对本地主机跳过验证
+                        instance.client.connected = True
                 if all(instance.client.connected for instance in self.instances[1:]):
                     logger.info('All clients connected')
                     sleep(10)
