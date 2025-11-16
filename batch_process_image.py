@@ -209,5 +209,82 @@ def batch_process_folder(in_folder, out_folder):
         process_image(f, out_path)
 
 
+def detect_split_line_mask(img, var_thresh=100, grad_thresh=30,
+                           center_ratio=0.01, min_height_ratio=0.1):
+    h, w = img.shape[:2]
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    var_map = local_rgb_variance(img, ksize=3)
+    grad_mag = gradient_magnitude(gray, ksize=3)
+    binary = np.where((var_map > var_thresh) | (grad_mag > grad_thresh), 255, 0).astype(np.uint8)
+
+    center_w = w // 2
+    delta = int(w * center_ratio)
+    search_region = binary[:, center_w - delta:center_w + delta]
+
+    black_proj = np.sum(255 - search_region, axis=0)
+    black_proj_smooth = cv2.GaussianBlur(black_proj.astype(np.float32), (11,1), 0)
+
+    split_idx = np.argmax(black_proj_smooth)
+    split_col = center_w - delta + split_idx
+
+    column = 255 - binary[:, split_col]
+    y_vals = np.where(column > 0)[0]
+    if len(y_vals) < h * min_height_ratio:
+        return None, None
+
+    split_mask = np.zeros((h, w), dtype=np.uint8)
+    split_mask[y_vals, split_col] = 255
+
+    return split_mask, split_col
+
+def split_double_page_image(img, rotate_back=False):
+    h, w = img.shape[:2]
+    rotated = False
+    if w < h:
+        img = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
+        rotated = True
+        h, w = img.shape[:2]
+
+    # 判断旋转后宽高比
+    if w / h < 1.2:
+        print(f"宽高比小于1.2 ({w / h:.2f})，不分割")
+        return None, None, None
+
+    split_mask, split_col = detect_split_line_mask(img)
+    if split_mask is None:
+        return None, None, None
+
+    page1 = img[:, :split_col]
+    page2 = img[:, split_col:]
+
+    if rotate_back and rotated:
+        page1 = cv2.rotate(page1, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        page2 = cv2.rotate(page2, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        split_mask = cv2.rotate(split_mask, cv2.ROTATE_90_COUNTERCLOCKWISE)
+
+    return page1, page2, split_mask
+
+def process_folder(folder_path, rotate_back=False):
+    for fname in os.listdir(folder_path):
+        if not fname.lower().endswith('.png'):
+            continue
+        img_path = os.path.join(folder_path, fname)
+        img = cv2.imread(img_path)
+        if img is None:
+            print(f"无法读取图片: {fname}")
+            continue
+
+        page1, page2, split_mask = split_double_page_image(img, rotate_back=rotate_back)
+        if split_mask is None:
+            print(f"{fname} → 未找到有效分割线或宽高比小，不分割")
+            continue
+
+        base_name = os.path.splitext(fname)[0]
+        cv2.imwrite(os.path.join(folder_path, f"{base_name}.page1.png"), page1)
+        cv2.imwrite(os.path.join(folder_path, f"{base_name}.page2.png"), page2)
+        print(f"{fname} → 已分割成 page1 / page2 / split_mask")
+
+
 if __name__ == "__main__":
     batch_process_folder(src_folder, dst_folder)
+    process_folder(dst_folder, rotate_back=True)
