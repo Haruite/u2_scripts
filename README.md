@@ -2,6 +2,8 @@
 deluge 客户端自动删种
 #### auto_magic_seeds.py
 给有上传速度的种子放魔法(支持各种 bt 客户端)
+#### batch_process_image
+批量拉直裁剪图片，并分页切割
 #### catch_magic.py
 追魔/搭桥(不限客户端)
 #### download_new_torrents.py
@@ -10,6 +12,8 @@ deluge 客户端自动删种
 根据文件名反查种子并添加到 qb 客户端
 #### give_sugar.py
 发糖
+#### movie_remux.py
+批量 remux 电影
 #### my_bencoder.py
 自用 bencode 格式编码与解码
 #### qb_del.py
