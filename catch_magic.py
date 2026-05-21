@@ -149,6 +149,7 @@ class CatchMagic:
             params['scope'] = 'private'
             resp1 = get('https://u2.kysdm.com/api/v1/promotion', **r_args, params=params).json()
             pro_list.extend([pro_data for pro_data in resp1['data']['promotion'] if pro_data['for_user_id'] == UID])
+            pro_list.sort(key=lambda pro_data: pro_data['promotion_id'], reverse=True)
 
         for pro_data in pro_list:
             magic_id = pro_data['promotion_id']
