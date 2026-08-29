@@ -1,6 +1,6 @@
 """
 给下载中的种子放魔法，python3.7 及以上应该能运行
-依赖：pip3 install requests bs4 lxml deluge-client loguru func-timeout pytz nest_asyncio aiohttp paramiko qbittorrent-api
+依赖：pip3 install requests bs4 lxml deluge-client loguru func-timeout pytz aiohttp paramiko qbittorrent-api
 
 支持客户端 deluge 和 qbittorrent，其它的客户端自己去写类吧
 支持配置多个客户端，可以任意停止和重新运行
@@ -41,7 +41,6 @@ import sys
 import threading
 
 import aiohttp
-import nest_asyncio
 import pytz
 
 from functools import reduce, lru_cache
@@ -202,6 +201,21 @@ check_peer_list = False  # type: Any
 '客户端的 TorrentManger 第一次添加某个种子时，是否从 peerlist 获取上传量，这项操作可以保证上传量计算不出差错'
 
 # **********************************************************************************************************************
+
+
+def run_coroutine_sync(coroutine):
+    """同步等待协程；若当前线程已有事件循环，则把协程放到独立线程运行。"""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coroutine)
+
+    # asyncio.run() 不能嵌套。nest_asyncio 的补丁在 Python 3.14 下无法正确
+    # 登记当前 Task，会进一步导致 aiohttp 的超时上下文报错。使用独立线程可让
+    # 协程在正常且隔离的事件循环中运行。
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(asyncio.run, coroutine).result()
+
 
 use_client = bool((magic and magic_new or limit) and len(clients_info) > 0 and enable_clients)
 use_limit = bool(limit and len(clients_info) > 0 and enable_clients)
@@ -649,7 +663,6 @@ class TorrentManager(UserDict):
         self.ana = accurate_next_announce
         self.ana_updated = False
         self.last_connect = 0
-        self.session = None
         self.deque_length = None
 
     def __repr__(self):
@@ -675,7 +688,8 @@ class TorrentManager(UserDict):
         un_debug_urls = f'https://u2.dmhy.org/getusertorrentlistajax.php?userid={uid}&type=leeching',
 
         async def request(self: Any, url: str, method: str = 'get',
-                          timeout: Union[int, float] = 10, retries: int = 5, **kw) -> Union[str, None]:
+                          timeout: Union[int, float] = 10, retries: int = 5,
+                          session: Optional[aiohttp.ClientSession] = None, **kw) -> Union[str, None]:
             """网页请求"""
             if use_client:
                 if BTClient.local_clients and any(local_client.tc_limited for local_client in BTClient.local_clients):
@@ -683,9 +697,19 @@ class TorrentManager(UserDict):
                     raise Exception('Waiting for release tc limit')
             cls = TorrentManager.RequestManager
 
+            # Run 实例可能由多个线程访问，而每个线程都有自己的事件循环。禁止从
+            # self.session 读取共享会话；调用方可以显式复用局部会话，否则就在当前
+            # Task/事件循环中创建一个。
+            if session is None:
+                async with aiohttp.ClientSession() as local_session:
+                    return await cls.request(
+                        self, url, method=method, timeout=timeout, retries=retries,
+                        session=local_session, **kw
+                    )
+
             for i in range(retries + 1):
                 try:
-                    async with self.session.request(method, url, **cls.requests_args, timeout=timeout, **kw) as resp:
+                    async with session.request(method, url, **cls.requests_args, timeout=timeout, **kw) as resp:
                         if resp.status < 300:
                             text = await resp.text()
                             if method == 'get':
@@ -788,7 +812,7 @@ class TorrentWrapper:
                             self.manager.ana_updated = True
                         elif delta < -600:  # next_announce 疑似异常
                             if not self.last_announce_time and not self.next_announce_is_true:
-                                asyncio.run(self.find_last_announce())
+                                run_coroutine_sync(self.find_last_announce())
                                 if abs(self.last_announce_time + 900 - time() - next_announce) < 5:
                                     # 这是强制汇报引起的，所以还不能确定
                                     del self.last_announce_time
@@ -798,7 +822,7 @@ class TorrentWrapper:
                                     self.manager.ana_updated = True
 
             if not self.manager.ana and not self.last_announce_time:
-                asyncio.run(self.find_last_announce())
+                run_coroutine_sync(self.find_last_announce())
 
             if self.last_announce_time:
                 return int(self.last_announce_time + self.announce_interval - time()) + 1
@@ -807,12 +831,14 @@ class TorrentWrapper:
 
         async def find_last_announce(self):
             self.last_announce_time = time()
-            async with aiohttp.ClientSession() as self.manager.session:
-                await self.info_from_peer_list()
+            async with aiohttp.ClientSession() as session:
+                await self.info_from_peer_list(session=session)
 
-        async def info_from_peer_list(self):
+        async def info_from_peer_list(self, session: Optional[aiohttp.ClientSession] = None):
             try:
-                peer_list = await self.manager.request(f'https://u2.dmhy.org/viewpeerlist.php?id={self.tid}')
+                peer_list = await self.manager.request(
+                    f'https://u2.dmhy.org/viewpeerlist.php?id={self.tid}', session=session
+                )
                 tables = BeautifulSoup(peer_list.replace('\n', ' '), 'lxml').find_all('table')
             except Exception as e:
                 logger.error(e)
@@ -895,7 +921,6 @@ class FunctionBase:
         self.to: TorrentWrapper = None
         self.clients = []
         self.magic_tasks = []
-        self.session = None
         self._lock = threading.Lock()
 
     def print(self, st: str):
@@ -1058,10 +1083,10 @@ class FunctionBase:
                         tw.uploaded_before = '0 B'
                         self.instances[0].torrent_manager[tw.tid].uploaded_before = '0 B'
                         tw.true_uploaded = tw.uploaded
-                        tasks.append(tw.info_from_peer_list())
+                        tasks.append(tw.info_from_peer_list)
             if tasks:
-                async with aiohttp.ClientSession() as self.torrent_manager.session:
-                    await asyncio.gather(*tasks)
+                async with aiohttp.ClientSession() as session:
+                    await asyncio.gather(*(task(session=session) for task in tasks))
 
             self.torrent_manager.last_connect = time()
             if update_upload:
@@ -1077,9 +1102,11 @@ class FunctionBase:
     async def get_info_from_web(self):
         try:
             with self._lock:
-                async with aiohttp.ClientSession() as self.session:
+                async with aiohttp.ClientSession() as session:
                     page = await self.request(
-                        f'https://u2.dmhy.org/getusertorrentlistajax.php?userid={uid}&type=leeching')
+                        f'https://u2.dmhy.org/getusertorrentlistajax.php?userid={uid}&type=leeching',
+                        session=session
+                    )
         except Exception as e:
             logger.error(e)
         else:
@@ -1116,8 +1143,10 @@ class FunctionBase:
                 else:
                     self.torrent_manager.pop(tid)
 
-            async def find_torrent_hash(_td: TorrentDict):
-                detail_page = await self.request(f'https://u2.dmhy.org/details.php?id={_td.tid}&hit=1')
+            async def find_torrent_hash(_td: TorrentDict, session: aiohttp.ClientSession):
+                detail_page = await self.request(
+                    f'https://u2.dmhy.org/details.php?id={_td.tid}&hit=1', session=session
+                )
                 soup = BeautifulSoup(detail_page.replace('\n', ''), 'lxml')
                 _td.tz = self.get_tz(soup)
                 tab = soup.find('table', {'width': '90%'})
@@ -1129,17 +1158,17 @@ class FunctionBase:
                     ]:  # 这里的空格是 nbsp，一定不要搞错了
                         _td['_id'] = _tr.tr.contents[-2].contents[1].strip()
 
-            tasks = []
+            detail_torrents = []
             for tid, td in tid_td.items():  # 新种子
                 td.uploaded_before = td.uploaded
                 td.add_time = time()
                 if use_client and (tid > min_tid or td.leecher_num > min_leecher_num):
-                    tasks.append(find_torrent_hash(td))
+                    detail_torrents.append(td)
                 td.last_get_time = time()
-            if tasks:
+            if detail_torrents:
                 with self._lock:
-                    async with aiohttp.ClientSession() as self.session:
-                        await asyncio.gather(*tasks)
+                    async with aiohttp.ClientSession() as session:
+                        await asyncio.gather(*(find_torrent_hash(td, session) for td in detail_torrents))
 
             self.torrent_manager.update(tid_td)
             self.torrent_manager.last_connect = time()
@@ -1281,9 +1310,8 @@ if magic:
                 else:
                     await self.magic_old()
             if self.magic_tasks:
-                async with aiohttp.ClientSession() as self.session:
-                    await asyncio.gather(*self.magic_tasks)
-                    self.save_magic_info()
+                await asyncio.gather(*self.magic_tasks)
+                self.save_magic_info()
                 self.magic_tasks.clear()
 
         async def magic_old(self):
@@ -1602,8 +1630,10 @@ if magic:
                 return
 
             try:
-                async with aiohttp.ClientSession() as self.session:
-                    page = await self.request(f'https://u2.dmhy.org/details.php?id={tid}&hit=1')
+                async with aiohttp.ClientSession() as session:
+                    page = await self.request(
+                        f'https://u2.dmhy.org/details.php?id={tid}&hit=1', session=session
+                    )
                 soup = BeautifulSoup(page.replace('\n', ''), 'lxml')
                 table = soup.find('table', {'width': '90%'})
                 if table:
@@ -1637,15 +1667,21 @@ if magic:
                         'torrent': tid, 'tsize': '', 'ttl': '', 'user_other': '', 'start': 0, 'promotion': 8,
                         'comment': ''}
                 data.update(_data)
-                response = await self.request('https://u2.dmhy.org/promotion.php?test=1', method='post', data=data)
-                _json = json.loads(response)
-                if _json['status'] == 'operational':
-                    uc = int(float(BeautifulSoup(_json['price'], 'lxml').span['title'].replace(',', '')))
-                    _post = await self.request('https://u2.dmhy.org/promotion.php', method='post', retries=0, data=data)
-                    if re.match(r'^<script.+<\/script>$', _post):
-                        self.magic_info.add_magic(to, {**_data, **{'tid': tid, 'ts': int(time()), 'uc': uc}})
-                    else:
-                        logger.error(f'Failed to send magic to torrent {tid} ------ data: {data}')
+                async with aiohttp.ClientSession() as session:
+                    response = await self.request(
+                        'https://u2.dmhy.org/promotion.php?test=1', method='post', data=data, session=session
+                    )
+                    _json = json.loads(response)
+                    if _json['status'] == 'operational':
+                        uc = int(float(BeautifulSoup(_json['price'], 'lxml').span['title'].replace(',', '')))
+                        _post = await self.request(
+                            'https://u2.dmhy.org/promotion.php', method='post', retries=0,
+                            data=data, session=session
+                        )
+                        if re.match(r'^<script.+<\/script>$', _post):
+                            self.magic_info.add_magic(to, {**_data, **{'tid': tid, 'ts': int(time()), 'uc': uc}})
+                        else:
+                            logger.error(f'Failed to send magic to torrent {tid} ------ data: {data}')
             except Exception as e:
                 logger.exception(e)
 
@@ -1934,8 +1970,8 @@ if use_limit:
             """根据 hash 搜索种子 id"""
             url = f'https://u2.dmhy.org/torrents.php?search={self.to._id}&search_area=5'
             try:
-                async with aiohttp.ClientSession() as self.session:
-                    text = await self.request(url)
+                async with aiohttp.ClientSession() as session:
+                    text = await self.request(url, session=session)
                 soup = BeautifulSoup(text.replace('\n', ''), 'lxml')
                 table = soup.select('table.torrents')
                 if table:
@@ -1954,9 +1990,11 @@ if use_limit:
 
         async def update_upload(self):
             try:
-                async with aiohttp.ClientSession() as self.session:
+                async with aiohttp.ClientSession() as session:
                     page = await self.request(
-                        f'https://u2.dmhy.org/getusertorrentlistajax.php?userid={uid}&type=leeching')
+                        f'https://u2.dmhy.org/getusertorrentlistajax.php?userid={uid}&type=leeching',
+                        session=session
+                    )
                 table = BeautifulSoup(page.replace('\n', ''), 'lxml').table
                 if not table:
                     return
@@ -1977,9 +2015,9 @@ if use_limit:
                                 if data['uploaded'].split(' ')[0] != '0':
                                     self.print(f"Last announce upload of torrent {tid} is {data['uploaded']}")
                         tw.update(data)
-                tasks = [to.info_from_peer_list() for to in tmp_info]
-                async with aiohttp.ClientSession() as self.torrent_manager.session:
-                    await asyncio.gather(*tasks)
+                if tmp_info:
+                    async with aiohttp.ClientSession() as session:
+                        await asyncio.gather(*(to.info_from_peer_list(session=session) for to in tmp_info))
             except Exception as e:
                 logger.exception(e)
 
@@ -2042,7 +2080,6 @@ Run.run = run_job
 class Main:
     def __init__(self, cls=Run):
         self.cls = cls
-        nest_asyncio.apply()
 
         if magic and magic_new and auto_mode and len(modes) > 1:
             for i in range(len(modes) - 1):
