@@ -666,7 +666,14 @@ class MagicSeed(Request):
         data.update(_data)
 
         try:
-            p1 = await self.request('https://u2.dmhy.org/promotion.php?test=1', method='post', data=data)
+            page = await self.request('https://u2.dmhy.org/promotion.php')
+            csrf = BeautifulSoup(page, 'lxml').select_one('meta[name="csrf-token"]')
+            if not csrf or not csrf.get('content'):
+                logger.error(f'Failed to get CSRF token for torrent {tid}; magic was not sent')
+                return
+            # 令牌和两次 POST 使用同一个会话，不把令牌写入魔法信息或日志。
+            post_data = {**data, '_csrf': csrf['content']}
+            p1 = await self.request('https://u2.dmhy.org/promotion.php?test=1', method='post', data=post_data)
             res_json = json.loads(p1)
             if res_json['status'] == 'operational':
                 uc = int(float(BeautifulSoup(res_json['price'], 'lxml').span['title'].replace(',', '')))
@@ -684,7 +691,7 @@ class MagicSeed(Request):
                     return
                 self.magic_info[_id] = {'uc': uc}
 
-                p2 = await self.request('https://u2.dmhy.org/promotion.php', method='post', retries=0, data=data)
+                p2 = await self.request('https://u2.dmhy.org/promotion.php', method='post', retries=0, data=post_data)
                 if re.match(r'^<script.+<\/script>$', p2):
                     logger.info(f"Sent a {data['ur']}x upload and {data['dr']}x download "
                                 f"magic to torrent {_id}, tid: {tid}, user {data['user'].lower()}, "

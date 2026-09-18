@@ -723,7 +723,7 @@ class TorrentManager(UserDict):
                                         cls.valid_cookie = True
                             return text
                         elif i == retries - 1:
-                            raise Exception(f'Failed to request... method: {method}, url: {url}, kw: {kw}'
+                            raise Exception(f'Failed to request... method: {method}, url: {url}'
                                             f' ------ status code: {resp.status}')
                 except Exception as e:
                     if i == retries - 1:
@@ -1668,15 +1668,22 @@ if magic:
                         'comment': ''}
                 data.update(_data)
                 async with aiohttp.ClientSession() as session:
+                    page = await self.request('https://u2.dmhy.org/promotion.php', session=session)
+                    csrf = BeautifulSoup(page, 'lxml').select_one('meta[name="csrf-token"]')
+                    if not csrf or not csrf.get('content'):
+                        logger.error(f'Failed to get CSRF token for torrent {tid}; magic was not sent')
+                        return
+                    # 令牌和两次 POST 使用同一个会话，不把令牌写入魔法信息或日志。
+                    post_data = {**data, '_csrf': csrf['content']}
                     response = await self.request(
-                        'https://u2.dmhy.org/promotion.php?test=1', method='post', data=data, session=session
+                        'https://u2.dmhy.org/promotion.php?test=1', method='post', data=post_data, session=session
                     )
                     _json = json.loads(response)
                     if _json['status'] == 'operational':
                         uc = int(float(BeautifulSoup(_json['price'], 'lxml').span['title'].replace(',', '')))
                         _post = await self.request(
                             'https://u2.dmhy.org/promotion.php', method='post', retries=0,
-                            data=data, session=session
+                            data=post_data, session=session
                         )
                         if re.match(r'^<script.+<\/script>$', _post):
                             self.magic_info.add_magic(to, {**_data, **{'tid': tid, 'ts': int(time()), 'uc': uc}})
